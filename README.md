@@ -13,7 +13,7 @@ cash-on-delivery settlement.
 | Admin console: overview, parcels, dispatch, hub scan, couriers, merchants, finance ledger, network, pricing | `apps/web` (`/admin`) | Operations, hub staff | Working |
 | Courier run sheet (mobile web) | `apps/web` (`/courier`) | Couriers | Working |
 | REST API for the mobile app | `apps/web` (`/api/v1`) | Mobile app | Working |
-| Mobile app: courier, hub and merchant modes in one Flutter app | `apps/mobile` | Couriers, hub staff, merchants | Written, not yet compiled (see its README) |
+| Mobile app: courier, hub and merchant modes in one Flutter app | `apps/mobile` | Couriers, hub staff, merchants | Passes static analysis in CI, not yet run on a device |
 
 The web app is one Next.js modular monolith. The domain logic lives in `apps/web/src/server`
 and is shared by the pages and the API, so every surface follows the same rules.

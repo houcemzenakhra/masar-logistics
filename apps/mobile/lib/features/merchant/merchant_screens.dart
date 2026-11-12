@@ -330,7 +330,7 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
               loading: () => const LinearProgressIndicator(),
               error: (e, _) => ErrorRetry(message: '$e', onRetry: () => ref.invalidate(wilayasProvider)),
               data: (list) => DropdownButtonFormField<int>(
-                value: _wilaya,
+                initialValue: _wilaya,
                 isExpanded: true,
                 validator: (v) => v == null ? 'Choose a wilaya' : null,
                 decoration: const InputDecoration(labelText: 'Wilaya'),

@@ -11,9 +11,9 @@ Stack: Riverpod, go_router, dio, mobile_scanner, flutter_secure_storage.
 
 ## Status
 
-The Dart code was written without a Flutter SDK available, so it has not been compiled or run
-yet. Expect to fix small issues on the first `flutter analyze`. The platform folders are not
-included; generate them once:
+The code passes `flutter analyze` on the stable channel in CI with no errors or warnings. It was
+written without a device or emulator available, so it has not been run yet: test each mode on a
+phone before relying on it. The platform folders are not included; generate them once:
 
 ```bash
 cd apps/mobile
