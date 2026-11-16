@@ -24,6 +24,11 @@ final wilayasProvider = FutureProvider<List<Wilaya>>((ref) async {
   return (res['wilayas'] as List).map((e) => Wilaya.fromJson(e as Map<String, dynamic>)).toList();
 });
 
+final communesProvider = FutureProvider.family<List<Wilaya>, int>((ref, wilayaId) async {
+  final res = await ref.read(apiProvider).get('/wilayas/$wilayaId/communes');
+  return (res['communes'] as List).map((e) => Wilaya.fromJson(e as Map<String, dynamic>)).toList();
+});
+
 class Wallet {
   const Wallet(this.balance, this.entries);
   final int balance;
@@ -262,18 +267,18 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
   final _form = GlobalKey<FormState>();
   final _name = TextEditingController();
   final _phone = TextEditingController();
-  final _commune = TextEditingController();
   final _address = TextEditingController();
   final _cod = TextEditingController(text: '0');
   final _weight = TextEditingController(text: '1');
   final _contents = TextEditingController();
   int? _wilaya;
+  int? _commune;
   bool _busy = false;
   String? _error;
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _commune, _address, _cod, _weight, _contents]) {
+    for (final c in [_name, _phone, _address, _cod, _weight, _contents]) {
       c.dispose();
     }
     super.dispose();
@@ -292,7 +297,7 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
         'recipientName': _name.text.trim(),
         'recipientPhone': _phone.text.trim(),
         'destWilayaId': _wilaya,
-        'commune': _commune.text.trim(),
+        'communeId': _commune,
         'address': _address.text.trim(),
         'codAmount': int.parse(_cod.text),
         'weightKg': double.parse(_weight.text.replaceAll(',', '.')),
@@ -338,11 +343,32 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
                   for (final w in list)
                     DropdownMenuItem(value: w.id, child: Text('${w.id.toString().padLeft(2, '0')} · ${w.name}')),
                 ],
-                onChanged: (v) => setState(() => _wilaya = v),
+                onChanged: (v) => setState(() {
+                  _wilaya = v;
+                  _commune = null;
+                }),
               ),
             ),
             gap,
-            TextFormField(controller: _commune, validator: _required, decoration: const InputDecoration(labelText: 'Commune')),
+            if (_wilaya == null)
+              const InputDecorator(
+                decoration: InputDecoration(labelText: 'Commune'),
+                child: Text('Choose the wilaya first', style: TextStyle(color: MasarColors.muted)),
+              )
+            else
+              ref.watch(communesProvider(_wilaya!)).when(
+                    loading: () => const LinearProgressIndicator(),
+                    error: (e, _) => ErrorRetry(message: '$e', onRetry: () => ref.invalidate(communesProvider(_wilaya!))),
+                    data: (list) => DropdownButtonFormField<int>(
+                      key: ValueKey(_wilaya),
+                      initialValue: _commune,
+                      isExpanded: true,
+                      validator: (v) => v == null ? 'Choose a commune' : null,
+                      decoration: const InputDecoration(labelText: 'Commune'),
+                      items: [for (final c in list) DropdownMenuItem(value: c.id, child: Text(c.name))],
+                      onChanged: (v) => setState(() => _commune = v),
+                    ),
+                  ),
             gap,
             TextFormField(
               controller: _address,

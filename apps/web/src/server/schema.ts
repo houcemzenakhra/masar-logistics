@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm";
-import { boolean, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
+import { boolean, doublePrecision, index, integer, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
 const createdAt = () => timestamp("created_at", { withTimezone: true }).notNull().defaultNow();
@@ -10,9 +10,12 @@ export const hubs = pgTable("hubs", {
   name: text("name").notNull(),
   wilayaId: integer("wilaya_id").notNull(),
   address: text("address").notNull().default(""),
+  /** Centre of the hub's commune: where courier routes start. */
+  lat: doublePrecision("lat"),
+  lng: doublePrecision("lng"),
 });
 
-/** Algeria's 58 wilayas. `zone` drives pricing, `hubId` is the hub that serves the wilaya. */
+/** Algeria's 69 wilayas. `zone` drives pricing, `hubId` is the hub that serves the wilaya. */
 export const wilayas = pgTable("wilayas", {
   id: integer("id").primaryKey(),
   name: text("name").notNull(),
@@ -21,12 +24,28 @@ export const wilayas = pgTable("wilayas", {
   hubId: text("hub_id").notNull().references(() => hubs.id),
 });
 
+/** The 1,541 communes, with their centre coordinates (see data/NOTICE.md). */
+export const communes = pgTable(
+  "communes",
+  {
+    id: integer("id").primaryKey(),
+    wilayaId: integer("wilaya_id").notNull().references(() => wilayas.id),
+    name: text("name").notNull(),
+    nameAr: text("name_ar").notNull(),
+    lat: doublePrecision("lat").notNull(),
+    lng: doublePrecision("lng").notNull(),
+  },
+  (t) => [index("communes_wilaya_idx").on(t.wilayaId)],
+);
+
 export const merchants = pgTable("merchants", {
   id: id(),
   name: text("name").notNull(),
   phone: text("phone").notNull(),
   wilayaId: integer("wilaya_id").notNull().references(() => wilayas.id),
   address: text("address").notNull().default(""),
+  /** Self-signups start as `pending` and cannot create orders until an admin approves them. */
+  status: text("status", { enum: ["pending", "active", "suspended"] }).notNull().default("active"),
   createdAt: createdAt(),
 });
 
@@ -51,6 +70,37 @@ export const rateTiers = pgTable("rate_tiers", {
   returnFee: integer("return_fee").notNull(),
 });
 
+/** A truck run between two hubs carrying sealed bags. */
+export const manifests = pgTable("manifests", {
+  id: id(),
+  code: text("code").notNull().unique(),
+  originHubId: text("origin_hub_id").notNull().references(() => hubs.id),
+  destHubId: text("dest_hub_id").notNull().references(() => hubs.id),
+  vehicle: text("vehicle").notNull().default(""),
+  driver: text("driver").notNull().default(""),
+  status: text("status", { enum: ["open", "departed", "arrived"] }).notNull().default("open"),
+  createdAt: createdAt(),
+  departedAt: timestamp("departed_at", { withTimezone: true }),
+  arrivedAt: timestamp("arrived_at", { withTimezone: true }),
+});
+
+/** A sack of parcels going from one hub to another. Scanned as one unit. */
+export const bags = pgTable(
+  "bags",
+  {
+    id: id(),
+    code: text("code").notNull().unique(),
+    originHubId: text("origin_hub_id").notNull().references(() => hubs.id),
+    destHubId: text("dest_hub_id").notNull().references(() => hubs.id),
+    status: text("status", { enum: ["open", "sealed", "in_transit", "received"] }).notNull().default("open"),
+    manifestId: text("manifest_id").references(() => manifests.id),
+    createdAt: createdAt(),
+    sealedAt: timestamp("sealed_at", { withTimezone: true }),
+    receivedAt: timestamp("received_at", { withTimezone: true }),
+  },
+  (t) => [index("bags_manifest_idx").on(t.manifestId), index("bags_status_idx").on(t.status)],
+);
+
 export const parcels = pgTable(
   "parcels",
   {
@@ -61,7 +111,9 @@ export const parcels = pgTable(
     recipientPhone: text("recipient_phone").notNull(),
     originWilayaId: integer("origin_wilaya_id").notNull().references(() => wilayas.id),
     destWilayaId: integer("dest_wilaya_id").notNull().references(() => wilayas.id),
+    /** Commune name as printed on the label. `communeId` links it to the directory when known. */
     commune: text("commune").notNull(),
+    communeId: integer("commune_id").references(() => communes.id),
     address: text("address").notNull(),
     description: text("description").notNull().default(""),
     weightKg: integer("weight_kg").notNull().default(1),
@@ -74,6 +126,10 @@ export const parcels = pgTable(
     destHubId: text("dest_hub_id").notNull().references(() => hubs.id),
     currentHubId: text("current_hub_id").references(() => hubs.id),
     courierId: text("courier_id").references(() => users.id),
+    /** The bag the parcel travels in between hubs, if any. */
+    bagId: text("bag_id").references(() => bags.id),
+    /** Position on the courier's optimised delivery route. */
+    routeSeq: integer("route_seq"),
     attempts: integer("attempts").notNull().default(0),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
@@ -83,6 +139,7 @@ export const parcels = pgTable(
     index("parcels_status_idx").on(t.status),
     index("parcels_merchant_idx").on(t.merchantId),
     index("parcels_courier_idx").on(t.courierId),
+    index("parcels_bag_idx").on(t.bagId),
   ],
 );
 

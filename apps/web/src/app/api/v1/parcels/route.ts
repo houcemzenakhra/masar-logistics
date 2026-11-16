@@ -21,8 +21,10 @@ const Body = z.object({
   merchantId: z.string().optional(),
   recipientName: z.string().trim().min(2),
   recipientPhone: z.string().trim().regex(/^0[5-7][\d ]{8,12}$/),
-  destWilayaId: z.number().int().min(1).max(58),
-  commune: z.string().trim().min(2),
+  destWilayaId: z.number().int().min(1),
+  /** Preferred: an id from GET /wilayas/:id/communes. */
+  communeId: z.number().int().optional(),
+  commune: z.string().trim().min(2).optional(),
   address: z.string().trim().min(4),
   description: z.string().trim().max(120).optional(),
   weightKg: z.number().min(0.1).max(70),

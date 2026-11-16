@@ -46,8 +46,14 @@ class _HubScreenState extends ConsumerState<HubScreen> {
         'direction': _direction,
         'idempotencyKey': const Uuid().v4(),
       });
-      final status = (res['parcel'] as Map<String, dynamic>)['status'] as String;
-      _log.insert(0, _ScanResult(code, statusLabels[status] ?? status, true));
+      // Scanning a bag in receives every parcel inside it; the server answers with the bag.
+      final bag = res['bag'] as Map<String, dynamic>?;
+      if (bag != null) {
+        _log.insert(0, _ScanResult(code, 'Bag received · ${bag['parcels']} parcels', true));
+      } else {
+        final status = (res['parcel'] as Map<String, dynamic>)['status'] as String;
+        _log.insert(0, _ScanResult(code, statusLabels[status] ?? status, true));
+      }
       _manual.clear();
     } on ApiException catch (e) {
       _log.insert(0, _ScanResult(code, e.message, false));
@@ -106,7 +112,7 @@ class _HubScreenState extends ConsumerState<HubScreen> {
                 controller: _manual,
                 textCapitalization: TextCapitalization.characters,
                 onSubmitted: _submit,
-                decoration: const InputDecoration(hintText: 'Or type MSR…'),
+                decoration: const InputDecoration(hintText: 'Or type MSR… / BAG…'),
               ),
             ),
             const SizedBox(width: 8),

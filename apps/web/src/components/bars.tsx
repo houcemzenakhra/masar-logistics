@@ -1,10 +1,12 @@
-/** Small daily-volume bar chart. Values are labelled on hover and summarised for screen readers. */
+import { t } from "@/lib/i18n";
+
+/** Small daily-volume bar chart. Values show on hover and are summarised for screen readers. */
 export function Bars({ data }: { data: { day: string; n: number }[] }) {
   const max = Math.max(1, ...data.map((d) => d.n));
   const total = data.reduce((s, d) => s + d.n, 0);
   return (
     <figure>
-      <div className="flex h-36 items-end gap-1.5" role="img" aria-label={`${total} orders over the last ${data.length} days`}>
+      <div className="flex h-36 items-end gap-1.5" role="img" aria-label={t("{n} orders over the last {d} days", { n: total, d: data.length })}>
         {data.map((d) => (
           <div key={d.day} className="group relative flex h-full flex-1 items-end">
             <div className="w-full rounded-t-md bg-accent/85 transition-colors group-hover:bg-accent-deep" style={{ height: `${Math.max(3, (d.n / max) * 100)}%`, opacity: d.n ? 1 : 0.25 }} />
@@ -12,7 +14,7 @@ export function Bars({ data }: { data: { day: string; n: number }[] }) {
           </div>
         ))}
       </div>
-      <figcaption className="mt-2 flex justify-between text-[11px] text-muted">
+      <figcaption className="ltr mt-2 flex justify-between text-[11px] text-muted">
         <span>{data[0]?.day.slice(5)}</span>
         <span>{data.at(-1)?.day.slice(5)}</span>
       </figcaption>

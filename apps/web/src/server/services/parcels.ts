@@ -1,10 +1,10 @@
 import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Session } from "../auth";
-import type { DB, Q } from "../db";
+import type { Q } from "../db";
 import { quote, tierFor, type Tier } from "../domain/pricing";
 import { MAX_ATTEMPTS, canTransition, type Status } from "../domain/state";
-import { hubs, merchants, parcelEvents, parcels, rateTiers, users, wilayas } from "../schema";
+import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, users, wilayas } from "../schema";
 import { acct, post } from "./ledger";
 
 export class DomainError extends Error {}
@@ -12,6 +12,7 @@ export class DomainError extends Error {}
 export type Actor = Pick<Session, "userId" | "role" | "merchantId" | "hubId">;
 
 const destWilaya = alias(wilayas, "dest_wilaya");
+const destCommune = alias(communes, "dest_commune");
 const destHub = alias(hubs, "dest_hub");
 const currentHub = alias(hubs, "current_hub");
 
@@ -25,7 +26,10 @@ const view = {
   recipientPhone: parcels.recipientPhone,
   destWilayaId: parcels.destWilayaId,
   destWilaya: destWilaya.name,
+  destWilayaAr: destWilaya.nameAr,
   commune: parcels.commune,
+  communeAr: destCommune.nameAr,
+  communeId: parcels.communeId,
   address: parcels.address,
   description: parcels.description,
   weightKg: parcels.weightKg,
@@ -39,6 +43,8 @@ const view = {
   currentHub: currentHub.name,
   courierId: parcels.courierId,
   courierName: users.name,
+  bagId: parcels.bagId,
+  routeSeq: parcels.routeSeq,
   attempts: parcels.attempts,
   createdAt: parcels.createdAt,
   updatedAt: parcels.updatedAt,
@@ -52,6 +58,7 @@ function baseQuery(q: Q) {
     .innerJoin(merchants, eq(parcels.merchantId, merchants.id))
     .innerJoin(destWilaya, eq(parcels.destWilayaId, destWilaya.id))
     .innerJoin(destHub, eq(parcels.destHubId, destHub.id))
+    .leftJoin(destCommune, eq(parcels.communeId, destCommune.id))
     .leftJoin(currentHub, eq(parcels.currentHubId, currentHub.id))
     .leftJoin(users, eq(parcels.courierId, users.id));
 }
@@ -64,6 +71,9 @@ export async function listParcels(
   f: {
     merchantId?: string | null;
     courierId?: string;
+    bagId?: string;
+    /** Parcels on a hub's floor that could go into a bag for this route. */
+    baggable?: { originHubId: string; destHubId: string };
     status?: Status | Status[];
     search?: string;
     limit?: number;
@@ -72,6 +82,10 @@ export async function listParcels(
   const where = [];
   if (f.merchantId) where.push(eq(parcels.merchantId, f.merchantId));
   if (f.courierId) where.push(eq(parcels.courierId, f.courierId));
+  if (f.bagId) where.push(eq(parcels.bagId, f.bagId));
+  if (f.baggable) {
+    where.push(eq(parcels.status, "at_origin_hub"), eq(parcels.currentHubId, f.baggable.originHubId), eq(parcels.destHubId, f.baggable.destHubId), sql`${parcels.bagId} is null`);
+  }
   if (f.status) where.push(Array.isArray(f.status) ? inArray(parcels.status, f.status) : eq(parcels.status, f.status));
   if (f.search?.trim()) {
     const s = `%${f.search.trim()}%`;
@@ -79,7 +93,8 @@ export async function listParcels(
   }
   return baseQuery(q)
     .where(where.length ? and(...where) : undefined)
-    .orderBy(desc(parcels.updatedAt))
+    // A courier's list follows the optimised route; everything else is newest first.
+    .orderBy(...(f.courierId ? [sql`${parcels.routeSeq} asc nulls last`] : []), desc(parcels.updatedAt))
     .limit(f.limit ?? 200);
 }
 
@@ -120,19 +135,30 @@ export type NewParcel = {
   recipientName: string;
   recipientPhone: string;
   destWilayaId: number;
-  commune: string;
+  /** From the commune directory. Give this, or a free-text `commune` for imports. */
+  communeId?: number;
+  commune?: string;
   address: string;
   description?: string;
   weightKg: number;
   codAmount: number;
 };
 
-export async function createParcel(db: DB, input: NewParcel, actor: Actor, at = new Date()) {
+export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = new Date()) {
   if (actor.role === "merchant" && actor.merchantId !== input.merchantId) throw new DomainError("Not your merchant account");
   if (actor.role !== "merchant" && actor.role !== "admin") throw new DomainError("Not allowed to create parcels");
   return db.transaction(async (tx) => {
     const [m] = await tx.select().from(merchants).where(eq(merchants.id, input.merchantId));
     if (!m) throw new DomainError("Unknown merchant");
+    if (m.status === "pending") throw new DomainError("Your account is waiting for approval. You can create orders once it is approved.");
+    if (m.status === "suspended") throw new DomainError("This merchant account is suspended");
+    let commune = input.commune?.trim() ?? "";
+    if (input.communeId) {
+      const [c] = await tx.select().from(communes).where(eq(communes.id, input.communeId));
+      if (!c || c.wilayaId !== input.destWilayaId) throw new DomainError("That commune is not in the chosen wilaya");
+      commune = c.name;
+    }
+    if (!commune) throw new DomainError("Choose a commune");
     const ws = await tx.select().from(wilayas).where(inArray(wilayas.id, [m.wilayaId, input.destWilayaId]));
     const origin = ws.find((w) => w.id === m.wilayaId);
     const dest = ws.find((w) => w.id === input.destWilayaId);
@@ -143,6 +169,7 @@ export async function createParcel(db: DB, input: NewParcel, actor: Actor, at = 
       .insert(parcels)
       .values({
         ...input,
+        commune,
         description: input.description ?? "",
         tracking: newTracking(),
         originWilayaId: origin.id,
@@ -170,13 +197,15 @@ export type TransitionInput = {
   idempotencyKey?: string;
   /** When it happened, for late-syncing devices and imports. Defaults to now. */
   at?: Date;
+  /** Set by the linehaul service when it moves a whole bag. */
+  viaBag?: boolean;
 };
 
 /**
  * The only way a parcel changes status. Checks the state machine and the actor's role, writes the
  * event, and posts ledger entries for delivery and returns, all in one database transaction.
  */
-export async function transition(db: DB, input: TransitionInput) {
+export async function transition(db: Q, input: TransitionInput) {
   const { actor, to } = input;
   return db.transaction(async (tx) => {
     if (input.idempotencyKey) {
@@ -196,6 +225,13 @@ export async function transition(db: DB, input: TransitionInput) {
     if (actor.role === "merchant" && actor.merchantId !== p.merchantId) throw new DomainError("Not your parcel");
     if (actor.role === "courier" && p.courierId !== actor.userId) throw new DomainError("This parcel is not assigned to you");
 
+    if (p.bagId && !input.viaBag) {
+      const [bag] = await tx.select().from(bags).where(eq(bags.id, p.bagId));
+      if (bag && bag.status !== "received") {
+        throw new DomainError(`${p.tracking} is in bag ${bag.code}. Move the bag, or take the parcel out of it first.`);
+      }
+    }
+
     const at = input.at ?? new Date();
     const patch: Partial<typeof parcels.$inferInsert> = { status: to, updatedAt: at };
     let hubId: string | null = null;
@@ -213,6 +249,7 @@ export async function transition(db: DB, input: TransitionInput) {
       throw new DomainError("Origin and destination hub are the same: send it out for delivery instead");
     }
     if (to === "created") patch.courierId = null;
+    if (to !== "out_for_delivery") patch.routeSeq = null;
     if (to === "at_origin_hub") {
       hubId = p.originHubId;
       patch.currentHubId = hubId;

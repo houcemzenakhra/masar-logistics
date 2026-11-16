@@ -1,10 +1,12 @@
-import { sql } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
+import COMMUNES from "./data/communes.json";
 import { hashPassword } from "./auth";
 import type { DB } from "./db";
 import type { Status } from "./domain/state";
-import { hubs, merchants, rateTiers, users, wilayas } from "./schema";
-import { handover, payout } from "./services/ledger";
+import { communes, hubs, merchants, rateTiers, users, wilayas } from "./schema";
+import { courierCash, handover, merchantOwed, payout } from "./services/ledger";
 import { createParcel, transition, type Actor } from "./services/parcels";
+import { optimiseCourierRoute } from "./services/routes";
 
 /** Password for every demo account. Change or remove these accounts before going live. */
 export const DEMO_PASSWORD = "masar-demo";
@@ -40,7 +42,17 @@ const WILAYAS: [number, string, string, number, string][] = [
   [52, "Béni Abbès", "بني عباس", 3, "BEC"], [53, "In Salah", "عين صالح", 3, "OUA"], [54, "In Guezzam", "عين قزام", 3, "OUA"],
   [55, "Touggourt", "تقرت", 3, "OUA"], [56, "Djanet", "جانت", 3, "OUA"], [57, "El M'Ghair", "المغير", 3, "OUA"],
   [58, "El Meniaa", "المنيعة", 3, "OUA"],
+  // Wilayas created in 2025.
+  [59, "Aflou", "آفلو", 2, "OUA"], [60, "Barika", "بريكة", 2, "CST"], [61, "El Kantara", "القنطرة", 2, "CST"],
+  [62, "Bir El Ater", "بئر العاتر", 2, "CST"], [63, "El Aricha", "العريشة", 2, "ORN"], [64, "Ksar Chellala", "قصر الشلالة", 2, "ORN"],
+  [65, "Aïn Ouessara", "عين وسارة", 2, "ALG"], [66, "Messaad", "مسعد", 2, "ALG"], [67, "Ksar El Boukhari", "قصر البخاري", 2, "ALG"],
+  [68, "Bou Saâda", "بوسعادة", 2, "SET"], [69, "El Abiodh Sidi Cheikh", "الأبيض سيدي الشيخ", 2, "ORN"],
 ];
+
+export const WILAYA_COUNT = WILAYAS.length;
+// Commune where each hub sits (the wilaya's capital commune).
+const HUB_COMMUNE: Record<string, number> = { ALG: 1601, ORN: 3101, CST: 2501, SET: 1901, OUA: 3001, BEC: 801 };
+type CommuneRow = [number, number, string, string, number, number];
 
 const TIERS = [
   { key: "local" as const, label: "Same wilaya", base: 400, perExtraKg: 50, returnFee: 200 },
@@ -49,25 +61,55 @@ const TIERS = [
   { key: "south" as const, label: "South", base: 1100, perExtraKg: 100, returnFee: 400 },
 ];
 
-/** Reference data every installation needs. */
+/**
+ * Reference data every installation needs: hubs, wilayas, communes and rates.
+ * Safe to run again: it only adds what is missing, so older databases pick up new wilayas and communes.
+ */
 export async function seedReference(db: DB) {
-  const hubRows = await db.insert(hubs).values(HUBS).returning();
+  await db.insert(hubs).values(HUBS).onConflictDoNothing({ target: hubs.code });
+  const hubRows = await db.select().from(hubs).where(inArray(hubs.code, HUBS.map((h) => h.code)));
   const hubId = Object.fromEntries(hubRows.map((h) => [h.code, h.id]));
-  await db.insert(wilayas).values(WILAYAS.map(([id, name, nameAr, zone, hub]) => ({ id, name, nameAr, zone, hubId: hubId[hub] })));
-  await db.insert(rateTiers).values(TIERS);
+  await db
+    .insert(wilayas)
+    .values(WILAYAS.map(([id, name, nameAr, zone, hub]) => ({ id, name, nameAr, zone, hubId: hubId[hub] })))
+    .onConflictDoNothing({ target: wilayas.id });
+  await db.insert(rateTiers).values(TIERS).onConflictDoNothing({ target: rateTiers.key });
+
+  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(communes);
+  const rows = COMMUNES as CommuneRow[];
+  if (n < rows.length) {
+    for (let i = 0; i < rows.length; i += 500) {
+      await db
+        .insert(communes)
+        .values(rows.slice(i, i + 500).map(([id, wilayaId, name, nameAr, lat, lng]) => ({ id, wilayaId, name, nameAr, lat, lng })))
+        .onConflictDoNothing({ target: communes.id });
+    }
+  }
+  for (const h of hubRows) {
+    const c = rows.find((r) => r[0] === HUB_COMMUNE[h.code]);
+    if (c && h.lat === null) await db.update(hubs).set({ lat: c[4], lng: c[5] }).where(eq(hubs.id, h.id));
+  }
   return hubId;
 }
 
 const NAMES = ["Amine Benali", "Yasmine Cherif", "Karim Mansouri", "Lina Haddad", "Sofiane Brahimi", "Nour Belkacem", "Rania Saadi", "Walid Ziani", "Imane Khelifi", "Mehdi Bouzid", "Sara Ferhat", "Anis Meziane"];
 const GOODS = ["Phone case", "Sneakers", "Perfume", "Kitchen set", "Handbag", "Headphones", "Books", "Kids clothing", "Watch", "Cosmetics"];
 const DESTS = [16, 16, 16, 9, 35, 15, 31, 25, 19, 6, 23, 30, 47, 13, 5, 8];
-const COMMUNES: Record<number, string> = { 16: "Bab Ezzouar", 9: "Ouled Yaïch", 35: "Boudouaou", 15: "Draâ Ben Khedda", 31: "Bir El Djir", 25: "El Khroub", 19: "El Eulma", 6: "Akbou", 23: "El Bouni", 30: "Rouissat", 47: "Bounoura", 13: "Mansourah", 5: "Tazoult", 8: "Kenadsa" };
 
-/** Reference data plus demo accounts and parcels, pushed through the real services. */
-export async function seed(db: DB) {
-  const [{ n }] = await db.select({ n: sql<number>`count(*)::int` }).from(hubs);
+/**
+ * Reference data plus demo accounts and parcels, pushed through the real services.
+ * Runs in one transaction, so a failure leaves no half-seeded database behind.
+ */
+export async function seed(root: DB) {
+  const [{ n }] = await root.select({ n: sql<number>`count(*)::int` }).from(users);
+  const hubId = await seedReference(root);
   if (n > 0) return;
-  const hubId = await seedReference(db);
+  await root.transaction((tx) => seedDemo(tx as unknown as DB, hubId));
+}
+
+async function seedDemo(db: DB, hubId: Record<string, string>) {
+  const byWilaya = new Map<number, number[]>();
+  for (const [id, w] of COMMUNES as CommuneRow[]) byWilaya.set(w, [...(byWilaya.get(w) ?? []), id]);
   const pw = await hashPassword(DEMO_PASSWORD);
 
   const [m1, m2] = await db
@@ -89,10 +131,25 @@ export async function seed(db: DB) {
       { name: "TechZone DZ", email: "merchant2@masar.dz", role: "merchant", merchantId: m2.id, passwordHash: pw },
     ])
     .returning();
+  // One courier at each of the other hubs, so parcels are delivered by someone local.
+  const regional = await db
+    .insert(users)
+    .values(
+      [["ORN", "Samir Oran"], ["CST", "Walid Constantine"], ["SET", "Nabil Sétif"], ["OUA", "Tarek Ouargla"], ["BEC", "Omar Béchar"]].map(([code, name], i) => ({
+        name,
+        email: `courier.${code.toLowerCase()}@masar.dz`,
+        phone: `077${i} 20 30 4${i}`,
+        role: "courier" as const,
+        hubId: hubId[code],
+        passwordHash: pw,
+      })),
+    )
+    .returning();
+  const localCourier = Object.fromEntries(regional.map((u) => [u.hubId!, u.id]));
 
   const A: Actor = { userId: admin.id, role: "admin", merchantId: null, hubId: null };
   const H: Actor = { userId: hubUser.id, role: "hub", merchantId: null, hubId: hubId.ALG };
-  const courier = (id: string): Actor => ({ userId: id, role: "courier", merchantId: null, hubId: hubId.ALG });
+  const courier = (id: string): Actor => ({ userId: id, role: "courier", merchantId: null, hubId: null });
 
   // How far along each demo parcel gets.
   const STAGES: Status[] = ["created", "pickup_assigned", "picked_up", "at_origin_hub", "in_transit", "at_destination_hub", "out_for_delivery", "delivered", "delivered", "delivered", "delivered", "attempt_failed", "returned"];
@@ -114,7 +171,7 @@ export async function seed(db: DB) {
         recipientName: NAMES[i % NAMES.length],
         recipientPhone: `05${String(50 + (i % 40))} ${String(10 + i).padStart(2, "0")} ${String(20 + ((i * 7) % 70)).padStart(2, "0")} ${String(11 + ((i * 3) % 80)).padStart(2, "0")}`,
         destWilayaId: dest,
-        commune: COMMUNES[dest] ?? "Centre-ville",
+        communeId: byWilaya.get(dest)![(i * 3) % byWilaya.get(dest)!.length],
         address: `${3 + i} cité ${["des Roses", "El Amel", "du 1er Novembre", "En-Nasr"][i % 4]}`,
         description: GOODS[i % GOODS.length],
         weightKg: 1 + (i % 8),
@@ -126,30 +183,41 @@ export async function seed(db: DB) {
     const go = (to: Status, actor: Actor, extra: { courierId?: string; note?: string } = {}) =>
       transition(db, { parcelId: p.id, to, actor, at: step(), ...extra });
     const sameHub = p.originHubId === p.destHubId;
+    // Picked up by an Algiers courier, delivered by the courier of the destination hub.
+    const did = sameHub ? cid : localCourier[p.destHubId];
 
     const path: (() => Promise<unknown>)[] = [
       () => go("pickup_assigned", A, { courierId: cid }),
       () => go("picked_up", courier(cid)),
       () => go("at_origin_hub", H),
       ...(sameHub ? [] : [() => go("in_transit", H), () => go("at_destination_hub", H)]),
-      () => go("out_for_delivery", A, { courierId: cid }),
+      () => go("out_for_delivery", A, { courierId: did }),
     ];
     const reach: Partial<Record<Status, number>> = { created: 0, pickup_assigned: 1, picked_up: 2, at_origin_hub: 3, in_transit: sameHub ? 3 : 4, at_destination_hub: sameHub ? 3 : 5 };
     const upTo = reach[stage] ?? path.length;
     for (const f of path.slice(0, upTo)) await f();
     if (upTo < path.length) continue;
 
-    if (stage === "delivered") await go("delivered", courier(cid));
-    if (stage === "attempt_failed") await go("attempt_failed", courier(cid), { note: "Recipient not answering" });
+    if (stage === "delivered") await go("delivered", courier(did));
+    if (stage === "attempt_failed") await go("attempt_failed", courier(did), { note: "Recipient not answering" });
     if (stage === "returned") {
-      await go("attempt_failed", courier(cid), { note: "Refused: changed their mind" });
+      await go("attempt_failed", courier(did), { note: "Refused: changed their mind" });
       await go("return_initiated", A);
       await go("returned", H);
     }
   }
 
-  // Part of the collected cash has been handed over, and one merchant has been paid once.
-  await handover(db, { courierId: c1.id, amount: 20000, by: admin.id });
-  await handover(db, { courierId: c2.id, amount: 15000, by: admin.id });
-  await payout(db, { merchantId: m1.id, amount: 12000, by: admin.id });
+  // Half of the cash each Algiers courier collected has been handed over, and one merchant paid once.
+  let banked = 0;
+  for (const c of [c1, c2]) {
+    const half = Math.floor((await courierCash(db, c.id)) / 2000) * 1000;
+    if (half > 0) {
+      await handover(db, { courierId: c.id, amount: half, by: admin.id });
+      banked += half;
+    }
+  }
+  const pay = Math.min(banked, Math.floor((await merchantOwed(db, m1.id)) / 2000) * 1000);
+  if (pay > 0) await payout(db, { merchantId: m1.id, amount: pay, by: admin.id });
+  await optimiseCourierRoute(db, c1.id);
+  await optimiseCourierRoute(db, c2.id);
 }

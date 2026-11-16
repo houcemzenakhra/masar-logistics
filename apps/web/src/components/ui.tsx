@@ -1,5 +1,6 @@
 import Link from "next/link";
 import type { ComponentProps, ReactNode } from "react";
+import { t } from "@/lib/i18n";
 import { STATUS_LABEL, STATUS_TONE, type Status, type Tone } from "@/server/domain/state";
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
@@ -37,7 +38,7 @@ export function Badge({ tone = "neutral", children }: { tone?: Tone; children: R
 
 export function StatusBadge({ status }: { status: string }) {
   const s = status as Status;
-  return <Badge tone={STATUS_TONE[s] ?? "neutral"}>{STATUS_LABEL[s] ?? status}</Badge>;
+  return <Badge tone={STATUS_TONE[s] ?? "neutral"}>{t(STATUS_LABEL[s] ?? status)}</Badge>;
 }
 
 export function Card({ className = "", children }: { className?: string; children: ReactNode }) {
@@ -74,7 +75,7 @@ export function Stat({ label, value, unit, hint, tone }: { label: string; value:
       <p className={cx("text-sm", tone === "accent" ? "text-white/60" : "text-muted")}>{label}</p>
       <p className="tnum mt-2 text-[28px] font-semibold leading-none tracking-tight">
         {value}
-        {unit && <span className={cx("ml-1.5 text-sm font-medium", tone === "accent" ? "text-white/60" : "text-muted")}>{unit}</span>}
+        {unit && <span className={cx("ms-1.5 text-sm font-medium", tone === "accent" ? "text-white/60" : "text-muted")}>{unit}</span>}
       </p>
       {hint && <p className={cx("mt-2 text-xs", tone === "accent" ? "text-white/50" : "text-muted")}>{hint}</p>}
     </div>
@@ -115,34 +116,43 @@ export function Field({ label, hint, children }: { label: string; hint?: string;
 }
 
 export const Input = (p: ComponentProps<"input">) => <input {...p} className={cx(FIELD, p.className)} />;
-export const Select = (p: ComponentProps<"select">) => <select {...p} className={cx(FIELD, "pr-8", p.className)} />;
+export const Select = (p: ComponentProps<"select">) => <select {...p} className={cx(FIELD, "pe-8", p.className)} />;
 
 export function Table({ head, children, empty }: { head: ReactNode[]; children: ReactNode; empty?: boolean }) {
   return (
     <div className="overflow-x-auto">
-      <table className="w-full min-w-[640px] text-left text-sm">
+      <table className="w-full min-w-[640px] text-start text-sm">
         <thead>
           <tr className="border-b border-line text-xs uppercase tracking-wide text-muted">
             {head.map((h, i) => (
-              <th key={i} className="px-5 py-3 font-medium">{h}</th>
+              <th key={i} className="whitespace-nowrap px-5 py-3 font-medium">{typeof h === "string" && h ? t(h) : h}</th>
             ))}
           </tr>
         </thead>
         <tbody className="divide-y divide-line">{children}</tbody>
       </table>
-      {empty && <p className="px-5 py-10 text-center text-sm text-muted">Nothing here yet.</p>}
+      {empty && <p className="px-5 py-10 text-center text-sm text-muted">{t("Nothing here yet.")}</p>}
     </div>
   );
 }
 
 export const Td = ({ className = "", ...p }: ComponentProps<"td">) => <td {...p} className={cx("px-5 py-3 align-middle", className)} />;
 
-export const Mono = ({ children }: { children: ReactNode }) => <span className="font-mono text-[13px] font-medium tracking-tight">{children}</span>;
+export const Mono = ({ children }: { children: ReactNode }) => <span className="inline-block font-mono text-[13px] font-medium tracking-tight">{children}</span>;
 
 export function Money({ value, className = "" }: { value: number; className?: string }) {
   return (
     <span className={cx("tnum whitespace-nowrap", className)}>
-      {new Intl.NumberFormat("en-US").format(value)} <span className="text-xs text-muted">DZD</span>
+      {new Intl.NumberFormat("en-US").format(value)} <span className="text-xs text-muted">{t("DZD")}</span>
     </span>
+  );
+}
+
+export function Notice({ tone = "warn", title, children }: { tone?: "warn" | "info"; title: string; children?: ReactNode }) {
+  return (
+    <div className={cx("mb-5 rounded-2xl border px-5 py-4 text-sm", tone === "warn" ? "border-warn/25 bg-warn-soft text-warn" : "border-info/20 bg-info-soft text-info")}>
+      <p className="font-semibold">{title}</p>
+      {children && <div className="mt-1 opacity-90">{children}</div>}
+    </div>
   );
 }

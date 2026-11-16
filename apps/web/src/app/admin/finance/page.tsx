@@ -1,11 +1,11 @@
-import { Badge, Card, CardHeader, PageHeader, Stat, Table, Td } from "@/components/ui";
+import { KindBadge, memo } from "@/components/ledger-kind";
+import { Card, CardHeader, PageHeader, Stat, Table, Td } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
+import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers, listMerchants } from "@/server/services/directory";
 import { acct, balance, balancesByPrefix, recentTxns } from "@/server/services/ledger";
-
-const KIND = { delivery: ["Delivery", "success"], return_fee: ["Return fee", "warn"], handover: ["Handover", "info"], payout: ["Payout", "progress"] } as const;
 
 export default async function Finance() {
   await requireRole("admin");
@@ -20,29 +20,29 @@ export default async function Finance() {
     listMerchants(db),
   ]);
   const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
-  const names: Record<string, string> = { "company:cash": "Company cash", "revenue:delivery": "Delivery fees", "revenue:returns": "Return fees" };
-  for (const c of cList) names[`courier:${c.id}`] = `Courier · ${c.name}`;
-  for (const m of mList) names[`merchant:${m.id}`] = `Merchant · ${m.name}`;
+  const names: Record<string, string> = { "company:cash": t("Company cash"), "revenue:delivery": t("Delivery fees"), "revenue:returns": t("Return fees") };
+  for (const c of cList) names[`courier:${c.id}`] = `${t("Courier")} · ${c.name}`;
+  for (const m of mList) names[`merchant:${m.id}`] = `${t("Merchant")} · ${m.name}`;
   return (
     <>
-      <PageHeader title="Finance" subtitle="A double-entry ledger: every dinar collected is traced from the recipient to the merchant." />
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <Stat label="Held by couriers" value={money(sum(couriers))} unit="DZD" />
-        <Stat label="Company cash" value={money(cash)} unit="DZD" />
-        <Stat label="Owed to merchants" value={money(-sum(merchants))} unit="DZD" />
-        <Stat tone="accent" label="Fees earned" value={money(-sum(revenue))} unit="DZD" />
+      <PageHeader title={t("Finance")} subtitle={t("A double-entry ledger: every dinar collected is traced from the recipient to the merchant.")} />
+      <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
+        <Stat label={t("Held by couriers")} value={money(sum(couriers))} unit={t("DZD")} />
+        <Stat label={t("Company cash")} value={money(cash)} unit={t("DZD")} />
+        <Stat label={t("Owed to merchants")} value={money(-sum(merchants))} unit={t("DZD")} />
+        <Stat tone="accent" label={t("Fees earned")} value={money(-sum(revenue))} unit={t("DZD")} />
       </div>
       <Card className="mt-5">
-        <CardHeader title="Ledger" hint="Latest entries. Debits and credits of each transaction sum to zero." />
-        <Table head={["When", "Type", "Account", "Memo", "Debit", "Credit"]} empty={lines.length === 0}>
+        <CardHeader title={t("Ledger")} hint={t("Latest entries. Debits and credits of each transaction sum to zero.")} />
+        <Table head={["When", "Type", "Account", "Details", "Debit", "Credit"]} empty={lines.length === 0}>
           {lines.map((l, i) => (
             <tr key={`${l.id}-${l.account}`} className={lines[i - 1]?.id === l.id ? "" : "border-t-2 border-line"}>
               <Td className="whitespace-nowrap text-[13px] text-muted">{dateTime(l.createdAt)}</Td>
-              <Td><Badge tone={KIND[l.kind][1]}>{KIND[l.kind][0]}</Badge></Td>
-              <Td>{names[l.account] ?? l.account}</Td>
-              <Td className="text-[13px] text-muted">{l.memo}</Td>
-              <Td className="tnum text-right">{l.amount > 0 ? money(l.amount) : ""}</Td>
-              <Td className="tnum text-right">{l.amount < 0 ? money(-l.amount) : ""}</Td>
+              <Td><KindBadge kind={l.kind} /></Td>
+              <Td className="whitespace-nowrap">{names[l.account] ?? l.account}</Td>
+              <Td className="whitespace-nowrap text-[13px] text-muted">{memo(l.memo)}</Td>
+              <Td className="tnum text-end">{l.amount > 0 ? money(l.amount) : ""}</Td>
+              <Td className="tnum text-end">{l.amount < 0 ? money(-l.amount) : ""}</Td>
             </tr>
           ))}
         </Table>

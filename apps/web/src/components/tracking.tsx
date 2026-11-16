@@ -1,5 +1,6 @@
 import { Check } from "lucide-react";
 import { dateTime } from "@/lib/format";
+import { t } from "@/lib/i18n";
 import { MAIN_PATH, STATUS_LABEL, progressIndex, type Status } from "@/server/domain/state";
 
 const SHORT: Record<string, string> = {
@@ -22,7 +23,7 @@ export function ProgressRail({ status }: { status: string }) {
         const done = i < at || status === "delivered";
         const now = i === at && status !== "delivered";
         return (
-          <li key={s} className="min-w-0">
+          <li key={s} className="min-w-0" aria-current={now ? "step" : undefined}>
             <div className="flex items-center">
               <span
                 className={`grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-semibold ${
@@ -33,7 +34,7 @@ export function ProgressRail({ status }: { status: string }) {
               </span>
               {i < MAIN_PATH.length - 1 && <span className={`mx-1 h-0.5 flex-1 rounded ${i < at ? "bg-ok" : "bg-line"}`} />}
             </div>
-            <p className={`mt-2 hidden truncate text-xs sm:block ${now ? "font-semibold text-ink" : "text-muted"}`}>{SHORT[s]}</p>
+            <p className={`mt-2 truncate text-xs max-sm:sr-only ${now ? "font-semibold text-ink" : "text-muted"}`}>{t(SHORT[s])}</p>
           </li>
         );
       })}
@@ -45,17 +46,17 @@ type Ev = { id: string; status: string; note: string; createdAt: Date; hub: stri
 
 export function Timeline({ events, showActor = false }: { events: Ev[]; showActor?: boolean }) {
   return (
-    <ol className="relative ml-2 border-l border-line">
+    <ol className="relative ms-2 border-s border-line">
       {events.map((e, i) => (
-        <li key={e.id} className="relative pb-5 pl-6 last:pb-0">
-          <span className={`absolute -left-[5px] top-1.5 size-2.5 rounded-full ring-4 ring-surface ${i === 0 ? "bg-accent" : "bg-line"}`} />
-          <p className={`text-sm ${i === 0 ? "font-semibold" : "font-medium text-ink-2"}`}>{STATUS_LABEL[e.status as Status] ?? e.status}</p>
+        <li key={e.id} className="relative pb-5 ps-6 last:pb-0">
+          <span className={`absolute -start-[5px] top-1.5 size-2.5 rounded-full ring-4 ring-surface ${i === 0 ? "bg-accent" : "bg-line"}`} />
+          <p className={`text-sm ${i === 0 ? "font-semibold" : "font-medium text-ink-2"}`}>{t(STATUS_LABEL[e.status as Status] ?? e.status)}</p>
           <p className="mt-0.5 text-[13px] text-muted">
             {dateTime(e.createdAt)}
-            {e.hub && ` · ${e.hub}`}
+            {e.hub && ` · ${t(e.hub)}`}
             {showActor && e.actor && ` · ${e.actor}`}
           </p>
-          {e.note && <p className="mt-1 text-[13px] text-ink-2">{e.note}</p>}
+          {e.note && <p className="mt-1 text-[13px] text-ink-2">{t(e.note)}</p>}
         </li>
       ))}
     </ol>

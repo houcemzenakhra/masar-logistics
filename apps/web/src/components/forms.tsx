@@ -2,6 +2,7 @@
 
 import { createContext, startTransition, useActionState, useContext, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
+import { useT } from "./i18n-client";
 
 export type FormState = { error?: string; ok?: string } | undefined;
 type Action = (prev: FormState, fd: FormData) => Promise<FormState>;
@@ -60,6 +61,7 @@ export function Submit({
   name?: string;
   value?: string;
 }) {
+  const t = useT();
   const status = useFormStatus();
   const pending = useContext(Pending) || status.pending;
   const sz = size === "sm" ? "h-8 px-3 text-[13px]" : size === "lg" ? "h-12 px-5 text-[15px]" : "h-10 px-4 text-sm";
@@ -71,7 +73,7 @@ export function Submit({
       disabled={pending}
       className={`inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-xl font-medium transition-colors disabled:opacity-60 ${sz} ${VARIANT[variant]} ${className}`}
     >
-      {pending ? "Working…" : children}
+      {pending ? t("Working…") : children}
     </button>
   );
 }

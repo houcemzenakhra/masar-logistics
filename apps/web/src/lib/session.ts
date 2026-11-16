@@ -1,9 +1,11 @@
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { initLocale } from "@/lib/i18n";
 import { HOME, SESSION_COOKIE, verifySession, type Session } from "@/server/auth";
 import type { Role } from "@/server/domain/state";
 
 export async function getSession(): Promise<Session | null> {
+  await initLocale();
   return verifySession((await cookies()).get(SESSION_COOKIE)?.value);
 }
 
@@ -19,5 +21,5 @@ export async function requireRole(...roles: Role[]): Promise<Session> {
 export async function apiSession(req: Request): Promise<Session | null> {
   const h = req.headers.get("authorization");
   if (h?.toLowerCase().startsWith("bearer ")) return verifySession(h.slice(7));
-  return getSession();
+  return verifySession((await cookies()).get(SESSION_COOKIE)?.value);
 }

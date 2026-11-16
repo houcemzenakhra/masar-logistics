@@ -57,6 +57,17 @@ class CourierScreen extends ConsumerWidget {
     }
   }
 
+  Future<void> _planRoute(BuildContext context, WidgetRef ref) async {
+    try {
+      final r = await ref.read(apiProvider).post('/courier/route', const {});
+      if (!context.mounted) return;
+      toast(context, 'Route planned · ${r['stops']} stops, about ${r['km']} km');
+      ref.invalidate(courierTasksProvider);
+    } on ApiException catch (e) {
+      if (context.mounted) toast(context, e.message, error: true);
+    }
+  }
+
   Future<void> _fail(BuildContext context, WidgetRef ref, Parcel p) async {
     final reason = await showModalBottomSheet<String>(
       context: context,
@@ -152,6 +163,15 @@ class CourierScreen extends ConsumerWidget {
                 if (deliveries.isEmpty && pickups.isEmpty)
                   const EmptyState('Nothing assigned to you right now. New jobs appear here when dispatch assigns them.'),
                 if (deliveries.isNotEmpty) const _SectionTitle('Deliveries'),
+                if (deliveries.length > 1)
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 0, 16, 12),
+                    child: OutlinedButton.icon(
+                      onPressed: () => _planRoute(context, ref),
+                      icon: const Icon(Icons.route_rounded, size: 18),
+                      label: const Text('Plan my route'),
+                    ),
+                  ),
                 for (final p in deliveries)
                   _DeliveryCard(
                     parcel: p,
