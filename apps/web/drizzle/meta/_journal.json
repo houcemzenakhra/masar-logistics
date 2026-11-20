@@ -15,6 +15,13 @@
       "when": 1794461677450,
       "tag": "0001_linehaul_communes_signup",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795150611592,
+      "tag": "0002_hardening_import_sms",
+      "breakpoints": true
     }
   ]
 }

@@ -60,6 +60,8 @@ export const listMerchants = (q: Q) =>
       address: merchants.address,
       createdAt: merchants.createdAt,
       parcels: sql<number>`(select count(*)::int from parcels p where p.merchant_id = merchants.id)`,
+      userId: sql<string | null>`(select u.id from users u where u.merchant_id = merchants.id order by u.created_at limit 1)`,
+      email: sql<string | null>`(select u.email from users u where u.merchant_id = merchants.id order by u.created_at limit 1)`,
     })
     .from(merchants)
     .innerJoin(wilayas, eq(merchants.wilayaId, wilayas.id))

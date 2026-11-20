@@ -10,8 +10,8 @@ available in English, French and Arabic (right to left).
 | Part | Where | Users | Status |
 | --- | --- | --- | --- |
 | Public website: landing, rate calculator, coverage, parcel tracking, merchant sign-up | `apps/web` (`/`, `/track`, `/signup`) | Anyone | Working |
-| Merchant portal: orders, new order, label printing, COD wallet | `apps/web` (`/merchant`) | Sellers | Working |
-| Admin console: overview, parcels, dispatch with auto-assign, hub scan, linehaul (bags and manifests), couriers, merchant approval, finance ledger, network, pricing, team | `apps/web` (`/admin`) | Operations, hub staff | Working |
+| Merchant portal: orders, new order, spreadsheet import, label printing, COD wallet | `apps/web` (`/merchant`) | Sellers | Working |
+| Admin console: overview, parcels, dispatch with auto-assign, hub scan, linehaul (bags and manifests), couriers, merchant approval, finance ledger, network, pricing, text messages, team, audit log | `apps/web` (`/admin`) | Operations, hub staff | Working |
 | Courier run sheet (mobile web) | `apps/web` (`/courier`) | Couriers | Working |
 | REST API for the mobile app | `apps/web` (`/api/v1`) | Mobile app | Working |
 | Mobile app: courier, hub and merchant modes in one Flutter app | `apps/mobile` | Couriers, hub staff, merchants | Passes static analysis in CI, not yet run on a device |
@@ -47,11 +47,32 @@ These accounts are demo data. Remove them, or change their passwords, before rea
 docker compose up -d
 cd apps/web
 export DATABASE_URL=postgres://masar:masar@localhost:5432/masar
-export AUTH_SECRET=$(openssl rand -base64 32)
+export AUTH_SECRET=$(openssl rand -base64 48)
 npm run db:migrate
-npm run db:seed     # optional demo data
+ADMIN_EMAIL=you@example.com ADMIN_PASSWORD='a long password' npm run db:seed   # reference data + first admin
 npm run dev
 ```
+
+`npm run db:seed:demo` instead loads the demo accounts and parcels, with the password taken from
+`MASAR_DEMO_PASSWORD`. Use it for staging only.
+
+### Deploying (Vercel + Neon)
+
+The staging site runs on Vercel with a Neon Postgres database. The project's root directory is
+`apps/web` and its build command is `npm run build:staging`, which applies migrations and loads
+the demo data (once) before building. For a real launch, use `npm run db:migrate && npm run db:seed`
+with `ADMIN_EMAIL` and `ADMIN_PASSWORD` instead, and leave out the demo settings.
+
+| Variable | Needed | What it is |
+| --- | --- | --- |
+| `DATABASE_URL` | yes | Pooled Postgres connection string, used by the app |
+| `DATABASE_URL_UNPOOLED` | recommended | Direct connection string, used for migrations |
+| `AUTH_SECRET` | yes | At least 32 random characters. Changing it signs everyone out |
+| `APP_URL` | recommended | Public address, used in SMS and reset links (defaults to the Vercel domain) |
+| `MASAR_ENV=staging` | staging | Shows a "test data" banner and keeps search engines out |
+| `MASAR_SHOW_DEMO=1`, `MASAR_DEMO_PASSWORD` | staging | Lists the demo accounts on the sign-in page; the password is not shown |
+| `SMS_PROVIDER` and `SMS_HTTP_*` | to send SMS | See "Text messages" below |
+| `RESEND_API_KEY`, `MAIL_FROM` | optional | Also send password reset links by email |
 
 ### Checks
 
@@ -130,6 +151,60 @@ right to left. Run with `MASAR_I18N_LOG=/path/file` to collect any string that h
 Shipping labels stay in French, and server-generated messages that contain names or numbers
 (for example "parcel X is in bag Y") are still shown in English.
 
+### Spreadsheet import
+
+`src/server/services/imports.ts`. Merchants upload a `.xlsx` or `.csv` file of up to 1,000 orders.
+Columns are recognised by their title in English, French or Arabic, in any order. Each row is
+checked before anything is created:
+- Phone numbers are read in any common form (`0550…`, `+213…`, a number that lost its zero).
+- Wilayas are matched by code or name, communes by name in either language. A commune at most two
+  letters off one name is corrected, and the correction is shown.
+- The same phone and amount twice in the file, or ordered in the last 7 days, is flagged.
+
+The merchant sees every row with its problems, then confirms. The valid rows are created in one
+transaction, and all their labels print in one go. `POST /api/v1/parcels/bulk` does the same for
+integrations, all or nothing, with a `dryRun` option.
+
+### Text messages
+
+`src/server/services/sms.ts`. Recipients get a text message when their parcel goes out for
+delivery (with the amount to prepare and the courier's number) and when an attempt fails. A
+"delivered" message can be switched on. Each parcel has a message language, French or Arabic.
+French messages avoid accented letters outside the GSM alphabet so most fit in one SMS part;
+Admin → Text messages previews each message with its part count.
+
+Messages are written to an outbox table in the same transaction as the parcel event, then sent
+after the response. Failed sends are kept and can be retried. With no provider configured,
+messages are recorded as "test mode" and nothing is sent.
+
+To send for real, use any gateway with an HTTP API:
+
+```bash
+SMS_PROVIDER=http
+SMS_HTTP_URL=https://gateway.example/api/send
+SMS_HTTP_HEADERS='{"Authorization":"Bearer <key>","Content-Type":"application/json"}'
+SMS_HTTP_BODY='{"to":"{{to}}","message":"{{text}}","sender":"{{from}}"}'
+SMS_HTTP_ID_PATH=data.id      # optional: where the gateway returns the message id
+SMS_FROM=Masar
+```
+
+### Security
+
+- **Sessions** are checked against the database on every request. Changing a password or
+  deactivating an account signs it out on every device.
+- **Rate limits** (`src/server/services/security.ts`), stored in Postgres so they hold across
+  server instances: 8 failed sign-ins per account and 100 per network address in 15 minutes
+  (Algerian mobile networks put many phones behind one address), 10 sign-ups per address per hour,
+  and limits on password reset requests, imports and test messages.
+- **Password reset**: "Forgot your password?" texts a one-hour link to the phone on the account,
+  and emails it when Resend is configured. The answer is the same whether or not the email exists.
+  Admins can also create a 24-hour link from Team or Merchants, to send by WhatsApp. Only a hash of
+  each token is stored.
+- **Audit log** (Admin → Audit log): sign-ins and failed sign-ins, sign-ups, approvals, accounts,
+  password resets, cash handovers, payouts, rate changes, imports, SMS settings, and parcels marked
+  lost or cancelled, with who, when and from which address. Parcel moves stay in each parcel's history.
+- Standard security headers; the staging site is kept out of search engines.
+
 ### Pricing
 
 Four tiers: same wilaya, north, highlands, south. The tier is set by the further zone of the
@@ -147,6 +222,7 @@ All under `/api/v1`, JSON, `Authorization: Bearer <token>` from `POST /auth/logi
 | POST | `/auth/signup` | Anyone (merchant self-signup) |
 | GET | `/wilayas`, `/wilayas/:id/communes` | Anyone |
 | GET, POST | `/parcels` | Merchant, admin (couriers see their own) |
+| POST | `/parcels/bulk` | Merchant: up to 1,000 orders, all or nothing, optional `dryRun` |
 | GET | `/parcels/:id` | Owner, assigned courier, staff |
 | POST | `/parcels/:id/transition` | By role, per the state machine |
 | POST | `/scan` | Hub, admin (a `BAG…` code receives the whole bag) |
@@ -158,10 +234,11 @@ All under `/api/v1`, JSON, `Authorization: Bearer <token>` from `POST /auth/logi
 
 ## Not built yet
 
-- Customer (recipient) app and SMS notifications.
+- Customer (recipient) app.
 - Translations in the mobile app (it is English only).
 - Bags and manifests screens in the mobile app (scanning a bag in works; packing is web only).
 - Map pins, live courier location and street-level routing.
-- KYC documents for merchants, claims and support tickets, password reset.
-- WooCommerce and Shopify plugins, webhooks.
+- KYC documents for merchants, claims and support tickets.
+- Merchant API keys and webhooks, WooCommerce and Shopify plugins.
+- A scheduled retry of failed text messages (today they are retried from Admin → Text messages).
 - The wilaya-to-hub assignment and the rates in the seed are starting values to review.

@@ -19,7 +19,8 @@ async function connect(): Promise<DB> {
   if (url) {
     const { drizzle } = await import("drizzle-orm/node-postgres");
     const { Pool } = await import("pg");
-    return drizzle(new Pool({ connectionString: url }), { schema }) as unknown as DB;
+    // Small pool: each serverless instance needs few connections, and Neon's pooler does the rest.
+    return drizzle(new Pool({ connectionString: url, max: 5, idleTimeoutMillis: 10_000 }), { schema }) as unknown as DB;
   }
   const { PGlite } = await import("@electric-sql/pglite");
   const { drizzle } = await import("drizzle-orm/pglite");

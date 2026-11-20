@@ -12,6 +12,7 @@ const ITEMS: NavItem[] = [
   { href: "/merchant", label: "Home", icon: "dashboard", exact: true },
   { href: "/merchant/parcels", label: "Orders", icon: "package" },
   { href: "/merchant/parcels/new", label: "New order", icon: "plus", exact: true },
+  { href: "/merchant/import", label: "Import", icon: "upload" },
   { href: "/merchant/wallet", label: "Wallet", icon: "wallet" },
 ];
 

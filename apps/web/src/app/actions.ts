@@ -7,18 +7,24 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 import type { FormState } from "@/components/forms";
 import { LOCALES, LOCALE_COOKIE, type Locale } from "@/i18n/config";
-import { getT } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
-import { COOKIE_OPTS, HOME, SESSION_COOKIE, login } from "@/server/auth";
+import { getT, locale } from "@/lib/i18n";
+import { kickSms } from "@/lib/kick";
+import { baseUrl, clientIp, requireRole } from "@/lib/session";
+import { COOKIE_OPTS, HOME, SESSION_COOKIE, login, type Session } from "@/server/auth";
 import { getDb } from "@/server/db";
 import { STATUSES, type Status } from "@/server/domain/state";
-import { rateTiers } from "@/server/schema";
+import { maskPhone, normalizeMobile } from "@/server/phone";
+import { rateTiers, users } from "@/server/schema";
 import { assign, autoAssign, createStaff, setUserActive } from "@/server/services/dispatch";
 import { handover, payout } from "@/server/services/ledger";
 import { addBagsToManifest, addToBag, createBag, createManifest, departManifest, receiveBag, removeBagFromManifest, removeFromBag, sealBag } from "@/server/services/linehaul";
+import { ImportHeaderError, commitBatch, discardBatch, stageImport } from "@/server/services/imports";
+import { sendMail } from "@/server/services/mail";
 import { DomainError, createParcel, getParcel, hubScanTarget, transition } from "@/server/services/parcels";
 import { optimiseCourierRoute } from "@/server/services/routes";
+import { LIMITS, audit, checkLimit, clearLimit, createResetToken, rateLimit, resetPassword } from "@/server/services/security";
 import { registerMerchant, setMerchantStatus } from "@/server/services/signup";
+import { PARCEL_KINDS, dispatch, queueSms, renderResetSms, setSmsSettings } from "@/server/services/sms";
 
 /** Turns expected failures into a translated message for the form; anything else still throws. */
 async function guard(fn: (t: Awaited<ReturnType<typeof getT>>) => Promise<FormState | void>): Promise<FormState> {
@@ -34,6 +40,17 @@ async function guard(fn: (t: Awaited<ReturnType<typeof getT>>) => Promise<FormSt
 }
 
 const refresh = () => revalidatePath("/", "layout");
+
+const kick = kickSms;
+
+/** Writes an audit entry for the signed-in person. */
+async function log(s: Session | null, action: string, entity: string, entityId: string | null, details: Record<string, unknown> = {}) {
+  await audit(await getDb(), { actor: s && { userId: s.userId, name: s.name }, action, entity, entityId, details, ip: await clientIp() });
+}
+
+function tooMany(t: (s: string, v?: Record<string, string | number>) => string, seconds: number): FormState {
+  return { error: t("Too many attempts. Try again in {n} minutes.", { n: Math.ceil(seconds / 60) }) };
+}
 const str = (fd: FormData, k: string) => String(fd.get(k) ?? "");
 
 export async function setLocaleAction(fd: FormData) {
@@ -46,8 +63,21 @@ export async function setLocaleAction(fd: FormData) {
 
 export async function loginAction(_: FormState, fd: FormData): Promise<FormState> {
   const t = await getT();
-  const res = await login(str(fd, "email"), str(fd, "password"));
-  if (!res) return { error: t("Wrong email or password.") };
+  const email = str(fd, "email").trim().toLowerCase();
+  const db = await getDb();
+  const ip = await clientIp();
+  const limits = [LIMITS.loginAccount(email), LIMITS.loginIp(ip)];
+  const limit = await checkLimit(db, limits);
+  if (!limit.ok) return tooMany(t, limit.retryAfter);
+  const res = await login(email, str(fd, "password"));
+  if (!res) {
+    const after = await rateLimit(db, limits);
+    if (!after.ok) return tooMany(t, after.retryAfter);
+    await audit(db, { actor: null, action: "login.failed", entity: "user", details: { email }, ip });
+    return { error: t("Wrong email or password.") };
+  }
+  await clearLimit(db, LIMITS.loginAccount(email).key);
+  await audit(db, { actor: { userId: res.session.userId, name: res.session.name }, action: "login", entity: "user", entityId: res.session.userId, ip });
   (await cookies()).set(SESSION_COOKIE, res.token, COOKIE_OPTS);
   redirect(HOME[res.session.role]);
 }
@@ -70,18 +100,78 @@ const Signup = z.object({
 });
 
 export async function signupAction(_: FormState, fd: FormData): Promise<FormState> {
+  const t = await getT();
+  const db = await getDb();
+  const limit = await rateLimit(db, [LIMITS.signupIp(await clientIp())]);
+  if (!limit.ok) return tooMany(t, limit.retryAfter);
   const res = await guard(async () => {
-    const { token } = await registerMerchant(await getDb(), Signup.parse(Object.fromEntries(fd)));
+    const input = Signup.parse(Object.fromEntries(fd));
+    const { token, session } = await registerMerchant(db, { ...input, phone: normalizeMobile(input.phone) ?? input.phone });
+    await log(session, "merchant.signup", "merchant", session.merchantId, { business: input.businessName });
     (await cookies()).set(SESSION_COOKIE, token, COOKIE_OPTS);
   });
   if (res?.error) return res;
   redirect("/merchant");
 }
 
+/** Sends a reset link by SMS (and by email when configured). Always answers the same way, so it does not reveal which emails have accounts. */
+export async function forgotAction(_: FormState, fd: FormData): Promise<FormState> {
+  const t = await getT();
+  const db = await getDb();
+  const ip = await clientIp();
+  const email = str(fd, "email").trim().toLowerCase();
+  const done: FormState = { ok: t("If an account uses this email, we have sent it a link to choose a new password. It is valid for 1 hour.") };
+  const limit = await rateLimit(db, [LIMITS.resetIp(ip)]);
+  if (!limit.ok) return tooMany(t, limit.retryAfter);
+  const [u] = await db.select().from(users).where(eq(users.email, email));
+  if (!u || !u.active) return done;
+  if (!(await rateLimit(db, [LIMITS.resetAccount(u.id)])).ok) return done;
+  const { token, hours } = await createResetToken(db, u.id, null);
+  const link = `${await baseUrl()}/reset/${token}`;
+  const lang = locale() === "ar" ? "ar" : "fr";
+  if (u.phone) await queueSms(db, { to: u.phone, body: renderResetSms(lang, link, hours), kind: "password_reset", userId: u.id });
+  await sendMail({ to: u.email, subject: "Masar: nouveau mot de passe / New password", text: `${renderResetSms("fr", link, hours)}\n\n${link}` });
+  await audit(db, { actor: null, action: "password.reset_requested", entity: "user", entityId: u.id, ip });
+  kick();
+  return done;
+}
+
+export async function resetAction(_: FormState, fd: FormData): Promise<FormState> {
+  const t = await getT();
+  if (str(fd, "password") !== str(fd, "confirm")) return { error: t("The two passwords are different.") };
+  const res = await guard(async () => {
+    const db = await getDb();
+    const u = await resetPassword(db, str(fd, "token"), str(fd, "password"));
+    await audit(db, { actor: { userId: u.userId, name: u.name }, action: "password.reset", entity: "user", entityId: u.userId, ip: await clientIp() });
+  });
+  if (res?.error) return res;
+  (await cookies()).delete(SESSION_COOKIE);
+  redirect("/login?reset=1");
+}
+
+/** An admin makes a reset link for someone who cannot receive it, e.g. to send by WhatsApp. */
+export async function resetLinkAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const db = await getDb();
+    const [u] = await db.select().from(users).where(eq(users.id, str(fd, "userId")));
+    if (!u) throw new DomainError("Unknown account");
+    const { token, hours } = await createResetToken(db, u.id, s.userId);
+    const link = `${await baseUrl()}/reset/${token}`;
+    const phone = normalizeMobile(u.phone);
+    if (phone) await queueSms(db, { to: phone, body: renderResetSms(locale() === "ar" ? "ar" : "fr", link, hours), kind: "password_reset", userId: u.id });
+    await log(s, "password.reset_link", "user", u.id, { email: u.email });
+    kick();
+    return { ok: `${t("Reset link for {name}, valid {h} hours:", { name: u.name, h: hours })} ${link}${phone ? ` — ${t("also sent by SMS to {p}", { p: maskPhone(phone) })}` : ""}` };
+  });
+}
+
 export async function merchantStatusAction(_: FormState, fd: FormData): Promise<FormState> {
-  await requireRole("admin");
+  const s = await requireRole("admin");
   return guard(async () => {
-    await setMerchantStatus(await getDb(), str(fd, "merchantId"), fd.get("status") === "suspended" ? "suspended" : "active");
+    const status = fd.get("status") === "suspended" ? "suspended" : "active";
+    const m = await setMerchantStatus(await getDb(), str(fd, "merchantId"), status);
+    await log(s, status === "active" ? "merchant.approve" : "merchant.suspend", "merchant", m.id, { name: m.name });
     refresh();
   });
 }
@@ -96,9 +186,11 @@ const Staff = z.object({
 });
 
 export async function createStaffAction(_: FormState, fd: FormData): Promise<FormState> {
-  await requireRole("admin");
+  const s = await requireRole("admin");
   return guard(async (t) => {
-    await createStaff(await getDb(), Staff.parse(Object.fromEntries(fd)));
+    const input = Staff.parse(Object.fromEntries(fd));
+    const u = await createStaff(await getDb(), { ...input, phone: normalizeMobile(input.phone) ?? input.phone });
+    await log(s, "staff.create", "user", u.id, { email: u.email, role: u.role });
     refresh();
     return { ok: t("Account created.") };
   });
@@ -107,7 +199,9 @@ export async function createStaffAction(_: FormState, fd: FormData): Promise<For
 export async function staffActiveAction(_: FormState, fd: FormData): Promise<FormState> {
   const s = await requireRole("admin");
   return guard(async () => {
-    await setUserActive(await getDb(), { userId: str(fd, "userId"), active: fd.get("active") === "1", by: s.userId });
+    const active = fd.get("active") === "1";
+    await setUserActive(await getDb(), { userId: str(fd, "userId"), active, by: s.userId });
+    await log(s, active ? "staff.reactivate" : "staff.deactivate", "user", str(fd, "userId"));
     refresh();
   });
 }
@@ -123,6 +217,7 @@ const NewParcel = z.object({
   description: z.string().trim().max(120).optional(),
   weightKg: z.coerce.number().min(0.1, "Weight must be above 0").max(70, "Maximum weight is 70 kg"),
   codAmount: z.coerce.number().int("COD must be a whole number of dinars").min(0).max(2_000_000),
+  recipientLang: z.enum(["fr", "ar"]).default("fr"),
 });
 
 export async function createParcelAction(_: FormState, fd: FormData): Promise<FormState> {
@@ -132,7 +227,7 @@ export async function createParcelAction(_: FormState, fd: FormData): Promise<Fo
     const input = NewParcel.parse(Object.fromEntries(fd));
     const merchantId = s.role === "merchant" ? s.merchantId! : str(fd, "merchantId");
     if (!merchantId) throw new DomainError("Choose a merchant");
-    const p = await createParcel(await getDb(), { ...input, weightKg: Math.ceil(input.weightKg), merchantId }, s);
+    const p = await createParcel(await getDb(), { ...input, recipientPhone: normalizeMobile(input.recipientPhone) ?? input.recipientPhone, weightKg: Math.ceil(input.weightKg), merchantId }, s);
     id = p.id;
   });
   if (res?.error) return res;
@@ -148,6 +243,8 @@ export async function transitionAction(_: FormState, fd: FormData): Promise<Form
     const db = await getDb();
     const p = await transition(db, { parcelId: str(fd, "parcelId"), to, actor: s, courierId: str(fd, "courierId") || undefined, note: str(fd, "note") || undefined });
     if (to === "out_for_delivery" && p.courierId) await optimiseCourierRoute(db, p.courierId);
+    if (to === "lost" || to === "cancelled") await log(s, `parcel.${to}`, "parcel", p.id, { tracking: p.tracking });
+    kick();
     refresh();
   });
 }
@@ -161,11 +258,13 @@ export async function assignAction(_: FormState, fd: FormData): Promise<FormStat
     const db = await getDb();
     if (fd.get("auto") === "1") {
       const r = await autoAssign(db, mode, s);
+      kick();
       refresh();
       if (r.assigned === 0) return { error: t("Nothing could be assigned: no active courier works from the hubs these parcels are at.") };
       return { ok: t("Parcels assigned: {n}, shared among {c} couriers.", { n: r.assigned, c: r.couriers }) + (r.skipped ? ` ${t("Left waiting because their hub has no courier: {n}.", { n: r.skipped })}` : "") };
     }
     const n = await assign(db, { ids: fd.getAll("ids").map(String), courierId: str(fd, "courierId"), mode }, s);
+    kick();
     refresh();
     return { ok: t("Parcels assigned: {n}.", { n }) };
   });
@@ -266,6 +365,7 @@ export async function handoverAction(_: FormState, fd: FormData): Promise<FormSt
   const s = await requireRole("admin");
   return guard(async (t) => {
     await handover(await getDb(), { courierId: str(fd, "courierId"), amount: amount(fd), by: s.userId });
+    await log(s, "ledger.handover", "user", str(fd, "courierId"), { amount: amount(fd) });
     refresh();
     return { ok: t("Handover recorded.") };
   });
@@ -275,6 +375,7 @@ export async function payoutAction(_: FormState, fd: FormData): Promise<FormStat
   const s = await requireRole("admin");
   return guard(async (t) => {
     await payout(await getDb(), { merchantId: str(fd, "merchantId"), amount: amount(fd), by: s.userId });
+    await log(s, "ledger.payout", "merchant", str(fd, "merchantId"), { amount: amount(fd) });
     refresh();
     return { ok: t("Payout recorded.") };
   });
@@ -288,12 +389,100 @@ const Tier = z.object({
 });
 
 export async function updateTierAction(_: FormState, fd: FormData): Promise<FormState> {
-  await requireRole("admin");
+  const s = await requireRole("admin");
   return guard(async (t) => {
     const tier = Tier.parse(Object.fromEntries(fd));
     const db = await getDb();
+    const [before] = await db.select().from(rateTiers).where(eq(rateTiers.key, tier.key));
     await db.update(rateTiers).set({ base: tier.base, perExtraKg: tier.perExtraKg, returnFee: tier.returnFee }).where(eq(rateTiers.key, tier.key));
+    await log(s, "pricing.update", "rate_tier", tier.key, { before: { base: before.base, perExtraKg: before.perExtraKg, returnFee: before.returnFee }, after: { base: tier.base, perExtraKg: tier.perExtraKg, returnFee: tier.returnFee } });
     refresh();
     return { ok: t("Saved. New orders use this rate.") };
   });
 }
+
+// ---------- bulk import ----------
+
+export async function importUploadAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  let id = "";
+  const t = await getT();
+  const db = await getDb();
+  if (!(await rateLimit(db, [LIMITS.importMerchant(s.merchantId!)])).ok) return { error: t("Too many uploads in the last hour. Try again later.") };
+  const res = await guard(async () => {
+    const file = fd.get("file");
+    if (!(file instanceof File) || file.size === 0) throw new DomainError("Choose a file to upload.");
+    try {
+      const b = await stageImport(db, { merchantId: s.merchantId!, userId: s.userId, file: { name: file.name, bytes: Buffer.from(await file.arrayBuffer()) } });
+      id = b.id;
+    } catch (e) {
+      if (e instanceof ImportHeaderError) {
+        return { error: t("The first row must name the columns. Missing: {cols}. Download the template to see the expected columns.", { cols: e.missing.map((m) => t(COLUMN[m])).join(", ") }) };
+      }
+      throw e;
+    }
+  });
+  if (res?.error) return res;
+  redirect(`/merchant/import/${id}`);
+}
+
+const COLUMN: Record<string, string> = { name: "Name", phone: "Phone", wilaya: "Wilaya", commune: "Commune", address: "Address", cod: "COD" };
+
+export async function importCommitAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  const res = await guard(async () => {
+    const n = await commitBatch(await getDb(), str(fd, "batchId"), s);
+    await log(s, "import.commit", "import", str(fd, "batchId"), { created: n });
+  });
+  if (res?.error) return res;
+  refresh();
+  redirect(`/merchant/import/${str(fd, "batchId")}`);
+}
+
+export async function importDiscardAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  await discardBatch(await getDb(), str(fd, "batchId"), s.merchantId!);
+  redirect("/merchant/import");
+}
+
+// ---------- text messages ----------
+
+export async function smsSettingsAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const enabled = Object.fromEntries(PARCEL_KINDS.map((k) => [k, fd.get(k) === "on"])) as Record<(typeof PARCEL_KINDS)[number], boolean>;
+    await setSmsSettings(await getDb(), { enabled });
+    await log(s, "sms.settings", "settings", "sms", { enabled });
+    refresh();
+    return { ok: t("Saved.") };
+  });
+}
+
+export async function smsRetryAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const ids = fd.getAll("ids").map(String);
+    const r = await dispatch(await getDb(), { retry: true, limit: 200, ids: ids.length ? ids : undefined });
+    await log(s, "sms.retry", "sms", null, r);
+    refresh();
+    return { ok: t("Messages processed: {n}. Sent: {s}. Failed: {f}.", { n: r.claimed, s: r.sent + r.simulated, f: r.failed }) };
+  });
+}
+
+export async function smsTestAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  const t = await getT();
+  const db = await getDb();
+  if (!(await rateLimit(db, [LIMITS.smsTest(s.userId)])).ok) return { error: t("Too many test messages. Try again later.") };
+  return guard(async () => {
+    const to = normalizeMobile(str(fd, "to"));
+    if (!to) throw new DomainError("Enter a mobile number like 0550 12 34 56");
+    const m = await queueSms(db, { to, body: str(fd, "lang") === "ar" ? "مسار: رسالة تجريبية. الإعدادات تعمل." : "Masar: message de test. La configuration fonctionne.", kind: "test", userId: s.userId });
+    const r = await dispatch(db, { ids: [m!.id] });
+    await log(s, "sms.test", "sms", m!.id, { to: maskPhone(to) });
+    refresh();
+    if (r.failed) return { error: t("The gateway refused the message. See the error in the list below.") };
+    return { ok: r.simulated ? t("Recorded in test mode: no SMS provider is configured, so nothing was sent.") : t("Sent to {p}.", { p: to }) };
+  });
+}
+

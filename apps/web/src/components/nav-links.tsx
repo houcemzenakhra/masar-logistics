@@ -1,11 +1,11 @@
 "use client";
 
-import { Banknote, Building2, LayoutDashboard, Network, Package, PlusCircle, Route, ScanLine, Send, Store, Tags, Truck, UserCog, Users, Wallet } from "lucide-react";
+import { Banknote, Building2, FileClock, MessageSquareText, Upload, LayoutDashboard, Network, Package, PlusCircle, Route, ScanLine, Send, Store, Tags, Truck, UserCog, Users, Wallet } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useT } from "./i18n-client";
 
-const ICONS = { dashboard: LayoutDashboard, package: Package, send: Send, users: Users, store: Store, network: Network, tags: Tags, banknote: Banknote, scan: ScanLine, plus: PlusCircle, wallet: Wallet, building: Building2, truck: Truck, team: UserCog, route: Route };
+const ICONS = { dashboard: LayoutDashboard, package: Package, send: Send, users: Users, store: Store, network: Network, tags: Tags, banknote: Banknote, scan: ScanLine, plus: PlusCircle, wallet: Wallet, building: Building2, truck: Truck, team: UserCog, route: Route, upload: Upload, sms: MessageSquareText, audit: FileClock };
 
 export type NavItem = { href: string; label: string; icon: keyof typeof ICONS; exact?: boolean };
 

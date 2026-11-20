@@ -1,5 +1,6 @@
 import { merchantStatusAction, payoutAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
+import { ResetLinkButton } from "@/components/reset-link";
 import { Badge, Card, CardHeader, Input, Money, PageHeader, Table, Td } from "@/components/ui";
 import { dateOnly, money } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
@@ -76,7 +77,10 @@ export default async function Merchants() {
                   )}
                 </Td>
                 <Td>
-                  {m.status === "active" ? <StatusForm id={m.id} status="suspended" label={t("Suspend")} variant="ghost" /> : <StatusForm id={m.id} status="active" label={t("Reactivate")} variant="ghost" />}
+                  <div className="flex flex-wrap items-start gap-2">
+                    {m.userId && m.status === "active" && <ResetLinkButton userId={m.userId} />}
+                    {m.status === "active" ? <StatusForm id={m.id} status="suspended" label={t("Suspend")} variant="ghost" /> : <StatusForm id={m.id} status="active" label={t("Reactivate")} variant="ghost" />}
+                  </div>
                 </Td>
               </tr>
             );

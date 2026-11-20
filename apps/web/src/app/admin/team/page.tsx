@@ -1,5 +1,6 @@
 import { createStaffAction, staffActiveAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
+import { ResetLinkButton } from "@/components/reset-link";
 import { Badge, Card, CardHeader, Field, Input, PageHeader, Select, Table, Td } from "@/components/ui";
 import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
@@ -29,13 +30,16 @@ export default async function Team() {
                 <Td className="whitespace-nowrap">{u.hub ? t(u.hub) : "—"}</Td>
                 <Td>{u.active ? <Badge tone="success">{t("Active")}</Badge> : <Badge>{t("Deactivated")}</Badge>}</Td>
                 <Td>
-                  {u.id !== s.userId && (
-                    <ActionForm action={staffActiveAction}>
-                      <input type="hidden" name="userId" value={u.id} />
-                      <input type="hidden" name="active" value={u.active ? "0" : "1"} />
-                      <Submit size="sm" variant="ghost">{u.active ? t("Deactivate") : t("Reactivate")}</Submit>
-                    </ActionForm>
-                  )}
+                  <div className="flex flex-wrap items-start gap-2">
+                    {u.active && <ResetLinkButton userId={u.id} />}
+                    {u.id !== s.userId && (
+                      <ActionForm action={staffActiveAction}>
+                        <input type="hidden" name="userId" value={u.id} />
+                        <input type="hidden" name="active" value={u.active ? "0" : "1"} />
+                        <Submit size="sm" variant="ghost">{u.active ? t("Deactivate") : t("Reactivate")}</Submit>
+                      </ActionForm>
+                    )}
+                  </div>
                 </Td>
               </tr>
             ))}

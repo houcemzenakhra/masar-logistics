@@ -8,7 +8,7 @@ import { STATUS_LABEL, nextStatuses, type Status } from "@/server/domain/state";
 import type { getParcel } from "@/server/services/parcels";
 import { ActionForm, Submit } from "./forms";
 import { ProgressRail, Timeline } from "./tracking";
-import { Card, CardHeader, LinkButton, Money, Select, StatusBadge } from "./ui";
+import { Badge, Card, CardHeader, LinkButton, Money, Select, StatusBadge } from "./ui";
 
 type Parcel = NonNullable<Awaited<ReturnType<typeof getParcel>>>;
 
@@ -45,7 +45,11 @@ const Row = ({ k, children }: { k: string; children: React.ReactNode }) => (
   </div>
 );
 
-export function ParcelDetail({ p, session, couriers = [], bag }: { p: Parcel; session: Session; couriers?: { id: string; name: string }[]; bag?: { id: string; code: string } | null }) {
+type Sms = { id: string; kind: string; status: string; createdAt: Date; body: string };
+const SMS_KIND: Record<string, string> = { out_for_delivery: "Out for delivery", attempt_failed: "Delivery failed", delivered: "Delivered" };
+const SMS_STATUS: Record<string, [string, "success" | "danger" | "warn" | "neutral"]> = { sent: ["Sent", "success"], failed: ["Failed", "danger"], simulated: ["Test mode", "warn"], queued: ["Queued", "neutral"], sending: ["Sending", "neutral"] };
+
+export function ParcelDetail({ p, session, couriers = [], bag, sms }: { p: Parcel; session: Session; couriers?: { id: string; name: string }[]; bag?: { id: string; code: string } | null; sms?: Sms[] }) {
   const next = nextStatuses(p.status as Status, session.role);
   const net = p.codAmount - p.deliveryFee;
   return (
@@ -89,6 +93,23 @@ export function ParcelDetail({ p, session, couriers = [], bag }: { p: Parcel; se
           </Card>
         )}
 
+        {sms && sms.length > 0 && (
+          <Card>
+            <CardHeader title={t("Text messages to the recipient")} />
+            <ul className="divide-y divide-line">
+              {sms.map((m) => (
+                <li key={m.id} className="px-5 py-3.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
+                    <span className="font-medium">{t(SMS_KIND[m.kind] ?? m.kind)} <span className="font-normal text-muted">· {dateTime(m.createdAt)}</span></span>
+                    <Badge tone={SMS_STATUS[m.status]?.[1] ?? "neutral"}>{t(SMS_STATUS[m.status]?.[0] ?? m.status)}</Badge>
+                  </div>
+                  <p dir="auto" className="mt-1 text-[13px] text-ink-2">{m.body}</p>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+
         <Card>
           <CardHeader title={t("History")} />
           <div className="p-5 sm:p-6"><Timeline events={p.events} showActor /></div>
@@ -104,6 +125,7 @@ export function ParcelDetail({ p, session, couriers = [], bag }: { p: Parcel; se
             <Row k="Wilaya">{place(p.destWilaya, p.destWilayaAr)}</Row>
             <Row k="Commune">{place(p.commune, p.communeAr)}</Row>
             <Row k="Address">{p.address}</Row>
+            <Row k="Text messages in">{p.recipientLang === "ar" ? "العربية" : "Français"}</Row>
           </dl>
         </Card>
         <Card className="p-5">

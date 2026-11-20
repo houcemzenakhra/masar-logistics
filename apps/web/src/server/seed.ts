@@ -8,7 +8,7 @@ import { courierCash, handover, merchantOwed, payout } from "./services/ledger";
 import { createParcel, transition, type Actor } from "./services/parcels";
 import { optimiseCourierRoute } from "./services/routes";
 
-/** Password for every demo account. Change or remove these accounts before going live. */
+/** Password of the demo accounts on a local database. Deployed demos set MASAR_DEMO_PASSWORD instead. */
 export const DEMO_PASSWORD = "masar-demo";
 
 const HUBS = [
@@ -100,17 +100,26 @@ const DESTS = [16, 16, 16, 9, 35, 15, 31, 25, 19, 6, 23, 30, 47, 13, 5, 8];
  * Reference data plus demo accounts and parcels, pushed through the real services.
  * Runs in one transaction, so a failure leaves no half-seeded database behind.
  */
-export async function seed(root: DB) {
+export async function seed(root: DB, password = DEMO_PASSWORD) {
   const [{ n }] = await root.select({ n: sql<number>`count(*)::int` }).from(users);
   const hubId = await seedReference(root);
   if (n > 0) return;
-  await root.transaction((tx) => seedDemo(tx as unknown as DB, hubId));
+  await root.transaction((tx) => seedDemo(tx as unknown as DB, hubId, password));
 }
 
-async function seedDemo(db: DB, hubId: Record<string, string>) {
+/** Reference data plus one operations account, for a real installation with no demo data. */
+export async function seedProduction(root: DB, admin: { email: string; password: string; name?: string }) {
+  await seedReference(root);
+  const [{ n }] = await root.select({ n: sql<number>`count(*)::int` }).from(users);
+  if (n > 0) return false;
+  await root.insert(users).values({ name: admin.name ?? "Operations", email: admin.email.trim().toLowerCase(), role: "admin", passwordHash: await hashPassword(admin.password) });
+  return true;
+}
+
+async function seedDemo(db: DB, hubId: Record<string, string>, password: string) {
   const byWilaya = new Map<number, number[]>();
   for (const [id, w] of COMMUNES as CommuneRow[]) byWilaya.set(w, [...(byWilaya.get(w) ?? []), id]);
-  const pw = await hashPassword(DEMO_PASSWORD);
+  const pw = await hashPassword(password);
 
   const [m1, m2] = await db
     .insert(merchants)

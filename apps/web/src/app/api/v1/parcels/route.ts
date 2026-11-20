@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { auth, json, route } from "@/lib/api";
 import { getDb } from "@/server/db";
+import { normalizeMobile } from "@/server/phone";
 import { STATUSES, type Status } from "@/server/domain/state";
 import { DomainError, createParcel, listParcels } from "@/server/services/parcels";
 
@@ -20,7 +21,8 @@ export const GET = route(async (req) => {
 const Body = z.object({
   merchantId: z.string().optional(),
   recipientName: z.string().trim().min(2),
-  recipientPhone: z.string().trim().regex(/^0[5-7][\d ]{8,12}$/),
+  recipientPhone: z.string().trim().refine((p) => normalizeMobile(p) !== null, "must be an Algerian mobile number"),
+  recipientLang: z.enum(["fr", "ar"]).optional(),
   destWilayaId: z.number().int().min(1),
   /** Preferred: an id from GET /wilayas/:id/communes. */
   communeId: z.number().int().optional(),
@@ -36,6 +38,6 @@ export const POST = route(async (req) => {
   const b = Body.parse(await req.json());
   const merchantId = s.role === "merchant" ? s.merchantId! : b.merchantId;
   if (!merchantId) throw new DomainError("merchantId is required");
-  const parcel = await createParcel(await getDb(), { ...b, weightKg: Math.ceil(b.weightKg), merchantId }, s);
+  const parcel = await createParcel(await getDb(), { ...b, recipientPhone: normalizeMobile(b.recipientPhone)!, weightKg: Math.ceil(b.weightKg), merchantId }, s);
   return json({ parcel }, 201);
 });

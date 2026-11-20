@@ -33,7 +33,7 @@ export async function registerMerchant(q: Q, a: Signup): Promise<{ session: Sess
       .insert(users)
       .values({ name: a.contactName.trim(), email, phone: a.phone.trim(), role: "merchant", merchantId: m.id, passwordHash: await hashPassword(a.password) })
       .returning();
-    return { userId: u.id, name: u.name, email: u.email, role: "merchant" as const, merchantId: m.id, hubId: null };
+    return { userId: u.id, name: u.name, email: u.email, role: "merchant" as const, merchantId: m.id, hubId: null, ver: u.sessionVersion };
   });
   return { session, token: await signSession(session) };
 }

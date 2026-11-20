@@ -6,6 +6,7 @@ import { quote, tierFor, type Tier } from "../domain/pricing";
 import { MAX_ATTEMPTS, canTransition, type Status } from "../domain/state";
 import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, users, wilayas } from "../schema";
 import { acct, post } from "./ledger";
+import { queueParcelSms } from "./sms";
 
 export class DomainError extends Error {}
 
@@ -31,6 +32,7 @@ const view = {
   communeAr: destCommune.nameAr,
   communeId: parcels.communeId,
   address: parcels.address,
+  recipientLang: parcels.recipientLang,
   description: parcels.description,
   weightKg: parcels.weightKg,
   codAmount: parcels.codAmount,
@@ -72,6 +74,7 @@ export async function listParcels(
     merchantId?: string | null;
     courierId?: string;
     bagId?: string;
+    importId?: string;
     /** Parcels on a hub's floor that could go into a bag for this route. */
     baggable?: { originHubId: string; destHubId: string };
     status?: Status | Status[];
@@ -83,6 +86,7 @@ export async function listParcels(
   if (f.merchantId) where.push(eq(parcels.merchantId, f.merchantId));
   if (f.courierId) where.push(eq(parcels.courierId, f.courierId));
   if (f.bagId) where.push(eq(parcels.bagId, f.bagId));
+  if (f.importId) where.push(eq(parcels.importId, f.importId));
   if (f.baggable) {
     where.push(eq(parcels.status, "at_origin_hub"), eq(parcels.currentHubId, f.baggable.originHubId), eq(parcels.destHubId, f.baggable.destHubId), sql`${parcels.bagId} is null`);
   }
@@ -135,6 +139,10 @@ export type NewParcel = {
   recipientName: string;
   recipientPhone: string;
   destWilayaId: number;
+  /** Language of the text messages to the recipient. Default French. */
+  recipientLang?: "fr" | "ar";
+  /** The spreadsheet import this order comes from. */
+  importId?: string;
   /** From the commune directory. Give this, or a free-text `commune` for imports. */
   communeId?: number;
   commune?: string;
@@ -324,6 +332,12 @@ export async function transition(db: Q, input: TransitionInput) {
     }
 
     const [updated] = await tx.update(parcels).set(patch).where(eq(parcels.id, p.id)).returning();
+
+    // Text the recipient. Queued in this transaction, sent after the response.
+    if (to === "out_for_delivery") await queueParcelSms(tx, p.id, "out_for_delivery");
+    if (to === "delivered") await queueParcelSms(tx, p.id, "delivered");
+    // When the parcel is going back to the merchant, the recipient is not told "we will come back".
+    if (to === "attempt_failed" && updated.status === "attempt_failed") await queueParcelSms(tx, p.id, "attempt_failed");
     return updated;
   });
 }

@@ -15,7 +15,9 @@ const ADMIN: NavItem[] = [
   { href: "/admin/finance", label: "Finance", icon: "banknote" },
   { href: "/admin/network", label: "Network", icon: "network" },
   { href: "/admin/pricing", label: "Pricing", icon: "tags" },
+  { href: "/admin/sms", label: "Text messages", icon: "sms" },
   { href: "/admin/team", label: "Team", icon: "team" },
+  { href: "/admin/audit", label: "Audit log", icon: "audit" },
 ];
 const HUB = ["/admin/scan", "/admin/linehaul", "/admin/parcels", "/admin/dispatch"];
 

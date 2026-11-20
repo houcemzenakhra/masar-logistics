@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { auth, json, route } from "@/lib/api";
+import { kickSms } from "@/lib/kick";
 import { getDb } from "@/server/db";
 import { STATUSES } from "@/server/domain/state";
 import { transition } from "@/server/services/parcels";
@@ -18,5 +19,6 @@ export const POST = route(async (req, ctx: { params: Promise<{ id: string }> }) 
   const s = await auth(req);
   const b = Body.parse(await req.json());
   const parcel = await transition(await getDb(), { ...b, parcelId: (await ctx.params).id, actor: s });
+  kickSms();
   return json({ parcel });
 });
