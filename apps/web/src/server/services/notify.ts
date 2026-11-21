@@ -70,6 +70,16 @@ const TEXTS = {
     fr: ["Camion en route", "{code} a quitté {origin} avec {n} sacs."],
     ar: ["شاحنة في الطريق", "غادر {code} {origin} ومعه {n} أكياس."],
   },
+  payout_paid: {
+    en: ["Payout sent", "{code}: {amount} DZD transferred to {account}."],
+    fr: ["Virement envoyé", "{code} : {amount} DA virés sur {account}."],
+    ar: ["تم التحويل", "{code}: حُوّل {amount} دج إلى {account}."],
+  },
+  cash_short: {
+    en: ["Cash missing", "{courier} handed in {amount} DZD less than expected ({code})."],
+    fr: ["Argent manquant", "{courier} a remis {amount} DA de moins que prévu ({code})."],
+    ar: ["نقص في النقد", "سلّم {courier} مبلغاً أقل من المتوقع بـ{amount} دج ({code})."],
+  },
   recipient: {
     en: ["Message from a recipient", "{tracking}: {what}"],
     fr: ["Message d'un destinataire", "{tracking} : {what}"],

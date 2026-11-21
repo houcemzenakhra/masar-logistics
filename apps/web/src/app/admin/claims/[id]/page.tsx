@@ -18,7 +18,7 @@ export default async function AdminClaim({ params }: { params: Promise<{ id: str
   return (
     <>
       <Link href="/admin/claims" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-ink"><ArrowLeft size={15} className="rtl:-scale-x-100" /> {t("Claims")}</Link>
-      <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <ClaimSummary c={c} parcelHref={`/admin/parcels/${c.parcelId}`} />
         {c.status === "open" && (
           <Card>

@@ -1,10 +1,11 @@
-import { deliverySettingsAction } from "@/app/actions";
+import { companyAction, deliverySettingsAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
-import { Badge, Card, CardHeader, PageHeader, Stat } from "@/components/ui";
+import { Badge, Card, CardHeader, Field, Input, PageHeader, Stat } from "@/components/ui";
 import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getDeliverySettings } from "@/server/services/delivery";
+import { getCompany } from "@/server/services/money";
 import { pushStats } from "@/server/services/notify";
 
 export const metadata = { title: "Settings" };
@@ -12,7 +13,7 @@ export const metadata = { title: "Settings" };
 export default async function Settings() {
   await requireRole("admin");
   const db = await getDb();
-  const [cfg, push] = await Promise.all([getDeliverySettings(db), pushStats(db)]);
+  const [cfg, push, company] = await Promise.all([getDeliverySettings(db), pushStats(db), getCompany(db)]);
   const options = [
     ["optional", "Optional", "Couriers can record the recipient's code, a photo or a signature, and can deliver without."],
     ["required", "Required", "Couriers must record at least one proof to mark a parcel delivered. Operations can still deliver without."],
@@ -34,6 +35,20 @@ export default async function Settings() {
               ))}
             </div>
             <Submit>{t("Save")}</Submit>
+          </ActionForm>
+        </Card>
+        <Card>
+          <CardHeader title={t("Company details")} hint={t("Printed on merchants' monthly statements.")} />
+          <ActionForm action={companyAction} className="grid gap-3 p-5 sm:grid-cols-2">
+            <Field label={t("Legal name")}><Input name="legalName" required defaultValue={company.legalName} /></Field>
+            <Field label={t("Address")}><Input name="address" defaultValue={company.address} /></Field>
+            <Field label="NIF"><Input name="nif" defaultValue={company.nif} /></Field>
+            <Field label="RC"><Input name="rc" defaultValue={company.rc} /></Field>
+            <Field label="NIS"><Input name="nis" defaultValue={company.nis} /></Field>
+            <Field label={t("Article d'imposition (AI)")}><Input name="ai" defaultValue={company.ai} /></Field>
+            <Field label={t("Phone")}><Input name="phone" defaultValue={company.phone} /></Field>
+            <Field label={t("Email")}><Input name="email" type="email" defaultValue={company.email} /></Field>
+            <div className="sm:col-span-2"><Submit>{t("Save")}</Submit></div>
           </ActionForm>
         </Card>
         <Card>

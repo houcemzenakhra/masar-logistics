@@ -51,7 +51,7 @@ export default async function Sms({ searchParams }: { searchParams: Promise<{ st
         <Stat label={t("Provider")} value={live ? live.name.toUpperCase() : "—"} />
       </div>
 
-      <div className="mt-5 grid gap-5 lg:grid-cols-[1fr_340px]">
+      <div className="mt-5 grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="min-w-0">
           <CardHeader title={t("Messages to recipients")} hint={t("Previews use sample values. French messages avoid accents so they fit in one SMS part.")} />
           <ActionForm action={smsSettingsAction}>

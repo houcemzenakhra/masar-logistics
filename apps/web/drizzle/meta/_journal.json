@@ -29,6 +29,13 @@
       "when": 1795236696520,
       "tag": "0003_apps_pod_push_claims",
       "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1795268023753,
+      "tag": "0004_money",
+      "breakpoints": true
     }
   ]
 }

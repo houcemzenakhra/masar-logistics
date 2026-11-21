@@ -80,3 +80,20 @@ class CourierActions {
 }
 
 final courierActionsProvider = Provider<CourierActions>(CourierActions.new);
+
+class Receipt {
+  const Receipt(this.code, this.at, this.expected, this.counted, this.difference);
+  final String code;
+  final DateTime at;
+  final int expected;
+  final int counted;
+  final int difference;
+}
+
+final receiptsProvider = FutureProvider.autoDispose<List<Receipt>>((ref) async {
+  final r = await ref.read(apiProvider).get('/courier/handovers');
+  return (r['handovers'] as List).map((e) {
+    final h = e as Map<String, dynamic>;
+    return Receipt(h['code'] as String, DateTime.parse(h['createdAt'] as String).toLocal(), (h['expected'] as num).toInt(), (h['counted'] as num).toInt(), (h['difference'] as num).toInt());
+  }).toList();
+});

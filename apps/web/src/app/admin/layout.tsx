@@ -22,10 +22,12 @@ const ADMIN: NavItem[] = [
   { href: "/admin/audit", label: "Audit log", icon: "audit" },
   { href: "/admin/settings", label: "Settings", icon: "settings" },
 ];
-const HUB = ["/admin/scan", "/admin/linehaul", "/admin/parcels", "/admin/dispatch", "/admin/live"];
+const HUB = ["/admin/scan", "/admin/linehaul", "/admin/parcels", "/admin/dispatch", "/admin/live", "/admin/finance/cash"];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const s = await requireRole("admin", "hub");
-  const items = s.role === "admin" ? ADMIN : HUB.map((h) => ADMIN.find((i) => i.href === h)!);
+  // Hub teams count couriers' cash; operations reach the same page under Finance.
+  const cash: NavItem = { href: "/admin/finance/cash", label: "Cash checks", icon: "banknote" };
+  const items = s.role === "admin" ? ADMIN : HUB.map((h) => [...ADMIN, cash].find((i) => i.href === h)!);
   return <Shell session={s} items={items}>{children}</Shell>;
 }

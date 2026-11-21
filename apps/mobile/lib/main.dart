@@ -15,6 +15,7 @@ import 'features/auth/login_screen.dart';
 import 'features/courier/courier_home.dart';
 import 'features/courier/courier_providers.dart';
 import 'features/courier/stop_screen.dart';
+import 'features/hub/cash_screen.dart';
 import 'features/hub/hub_home.dart';
 import 'features/hub/linehaul_screens.dart';
 import 'features/inbox/inbox_screen.dart';
@@ -71,6 +72,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/claims/new', builder: (_, s) => NewClaimScreen(tracking: s.uri.queryParameters['tracking'])),
       GoRoute(path: '/claims/:id', builder: (_, s) => ClaimScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/hub/bags', builder: (_, __) => const BagsScreen()),
+      GoRoute(path: '/hub/cash', builder: (_, __) => const CourierCashScreen()),
       GoRoute(path: '/hub/bags/:id', builder: (_, s) => BagScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/hub/manifests', builder: (_, __) => const ManifestsScreen()),
       GoRoute(path: '/hub/manifests/:id', builder: (_, s) => ManifestScreen(id: s.pathParameters['id']!)),

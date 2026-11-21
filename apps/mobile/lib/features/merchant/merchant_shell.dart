@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../core/api.dart';
 import '../../core/format.dart';
 import '../../core/i18n.dart';
 import '../../core/models.dart';
@@ -214,7 +216,103 @@ class _OrdersTabState extends ConsumerState<_OrdersTab> {
   }
 }
 
-const _kindLabels = {'delivery': 'Delivery', 'return_fee': 'Return fee', 'handover': 'Handover', 'payout': 'Payout', 'claim': 'Claim payment'};
+const _kindLabels = {'delivery': 'Delivery', 'return_fee': 'Return fee', 'handover': 'Handover', 'payout': 'Payout', 'claim': 'Claim payment', 'courier_pay': 'Courier pay', 'cash_adjustment': 'Cash adjustment'};
+const _payoutStatus = {'requested': 'Waiting', 'in_batch': 'In a transfer list', 'paid': 'Paid', 'rejected': 'Refused', 'cancelled': 'Cancelled'};
+
+Future<void> _editAccount(BuildContext context, WidgetRef ref, Map<String, dynamic>? current) async {
+  var method = (current?['method'] as String?) ?? 'ccp';
+  final account = TextEditingController(text: current?['account'] as String? ?? '');
+  final holder = TextEditingController(text: current?['holder'] as String? ?? '');
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, set) => AlertDialog(
+        title: Text(tr('Payout account')),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          SegmentedButton<String>(
+            segments: [ButtonSegment(value: 'ccp', label: const Text('CCP')), ButtonSegment(value: 'bank', label: Text(tr('Bank (RIB)')))],
+            selected: {method},
+            onSelectionChanged: (v) => set(() => method = v.first),
+          ),
+          const SizedBox(height: 12),
+          TextField(controller: account, keyboardType: TextInputType.number, decoration: InputDecoration(labelText: tr('Account number'), helperText: method == 'ccp' ? tr('Number and 2-digit key') : tr('20 digits'))),
+          const SizedBox(height: 10),
+          TextField(controller: holder, textCapitalization: TextCapitalization.words, decoration: InputDecoration(labelText: tr('Account holder'))),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel'))),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Save'))),
+        ],
+      ),
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  final r = await runAction(context, () => ref.read(apiProvider).post('/merchant/payout-account', {'method': method, 'account': account.text, 'holder': holder.text}), done: tr('Saved.'));
+  if (r != null) ref.invalidate(payoutsProvider);
+}
+
+Future<void> _request(BuildContext context, WidgetRef ref, Payouts p) async {
+  final amount = TextEditingController(text: '${p.available}');
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(tr('Request payout')),
+      content: TextField(
+        controller: amount,
+        keyboardType: TextInputType.number,
+        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+        decoration: InputDecoration(labelText: tr('Amount (DZD)'), helperText: tr('Between {min} and {max} DZD', {'min': money(p.minimum), 'max': money(p.available)})),
+      ),
+      actions: [
+        TextButton(onPressed: () => Navigator.pop(ctx, false), child: Text(tr('Cancel'))),
+        TextButton(onPressed: () => Navigator.pop(ctx, true), child: Text(tr('Request'))),
+      ],
+    ),
+  );
+  if (ok != true || !context.mounted) return;
+  final r = await runAction(context, () => ref.read(apiProvider).post('/merchant/payouts', {'amount': int.tryParse(amount.text) ?? 0}), done: tr('Requested. Finance sends transfers in batches, usually within two working days.'));
+  if (r != null) ref.invalidate(payoutsProvider);
+}
+
+class _PayoutCard extends ConsumerWidget {
+  const _PayoutCard();
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final p = ref.watch(payoutsProvider).valueOrNull;
+    if (p == null) return const SizedBox.shrink();
+    final acc = p.account;
+    return Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+      const SizedBox(height: 12),
+      CardBox(
+        child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+          InfoRow(tr('Can be requested now'), dzd(p.available), valueStyle: const TextStyle(fontWeight: FontWeight.w700)),
+          if (p.pending > 0) InfoRow(tr('Already requested'), dzd(p.pending)),
+          if (acc != null) InfoRow(tr('Paid to'), '${acc['method'] == 'ccp' ? 'CCP' : tr('Bank')} ${acc['account']}'),
+          const SizedBox(height: 8),
+          if (acc == null)
+            FilledButton(onPressed: () => _editAccount(context, ref, null), child: Text(tr('Add your payout account')))
+          else ...[
+            FilledButton(onPressed: p.available >= p.minimum ? () => _request(context, ref, p) : null, child: Text(tr('Request payout'))),
+            TextButton(onPressed: () => _editAccount(context, ref, acc), child: Text(tr('Change payout account'))),
+          ],
+        ]),
+      ),
+      if (p.requests.isNotEmpty) ...[
+        SectionTitle(tr('Payout requests')),
+        for (final r in p.requests.take(10))
+          Card(
+            margin: const EdgeInsets.only(bottom: 6),
+            child: ListTile(
+              title: Ltr(r['code'] as String, style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w600)),
+              subtitle: Text(tr(_payoutStatus[r['status']] ?? '${r['status']}')),
+              trailing: Ltr(dzd((r['amount'] as num).toInt()), style: const TextStyle(fontWeight: FontWeight.w700)),
+            ),
+          ),
+      ],
+    ]);
+  }
+}
 
 class _WalletTab extends ConsumerWidget {
   const _WalletTab();
@@ -223,7 +321,10 @@ class _WalletTab extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final w = ref.watch(walletProvider);
     return RefreshIndicator(
-      onRefresh: () async => ref.invalidate(walletProvider),
+      onRefresh: () async {
+        ref.invalidate(walletProvider);
+        ref.invalidate(payoutsProvider);
+      },
       child: AsyncBody(
         value: w,
         onRetry: () => ref.invalidate(walletProvider),
@@ -239,6 +340,7 @@ class _WalletTab extends ConsumerWidget {
               Text(tr('Cash collected on your deliveries, minus fees, less what has been paid out to you.'), style: const TextStyle(color: Colors.white70, height: 1.4)),
             ]),
           ),
+          const _PayoutCard(),
           SectionTitle(tr('Statement')),
           if (wallet.entries.isEmpty) EmptyState(tr('No entries yet.')),
           for (final e in wallet.entries)

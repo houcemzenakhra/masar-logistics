@@ -1,12 +1,12 @@
 import { t } from "@/lib/i18n";
 import { Badge } from "./ui";
 
-const KIND = { delivery: ["Delivery", "success"], return_fee: ["Return fee", "warn"], handover: ["Handover", "info"], payout: ["Payout", "progress"], claim: ["Claim payment", "success"] } as const;
+const KIND = { delivery: ["Delivery", "success"], return_fee: ["Return fee", "warn"], handover: ["Handover", "info"], payout: ["Payout", "progress"], claim: ["Claim payment", "success"], courier_pay: ["Courier pay", "progress"], cash_adjustment: ["Cash adjustment", "warn"] } as const;
 
 export const KindBadge = ({ kind }: { kind: keyof typeof KIND }) => <Badge tone={KIND[kind][1]}>{t(KIND[kind][0])}</Badge>;
 
 /** Ledger memos are written in English as "<what> <tracking>". Translate the words, keep the number. */
 export function memo(text: string) {
-  const m = text.match(/^(.*?)(\s+MSR\d+)?$/);
+  const m = text.match(/^(.*?)(\s+(?:MSR\d+|[A-Z]{2,4}-[A-Z0-9-]+))?$/);
   return m ? `${t(m[1])}${m[2] ?? ""}` : text;
 }

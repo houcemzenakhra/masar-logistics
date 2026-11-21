@@ -1,3 +1,4 @@
+import { FinanceNav } from "@/components/finance-nav";
 import { KindBadge, memo } from "@/components/ledger-kind";
 import { Card, CardHeader, PageHeader, Stat, Table, Td } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
@@ -20,12 +21,21 @@ export default async function Finance() {
     listMerchants(db),
   ]);
   const sum = (o: Record<string, number>) => Object.values(o).reduce((a, b) => a + b, 0);
-  const names: Record<string, string> = { "company:cash": t("Company cash"), "revenue:delivery": t("Delivery fees"), "revenue:returns": t("Return fees") };
+  const names: Record<string, string> = {
+    "company:cash": t("Company cash"),
+    "revenue:delivery": t("Delivery fees"),
+    "revenue:returns": t("Return fees"),
+    "expense:claims": t("Claims paid"),
+    "expense:courier_pay": t("Courier pay"),
+    "expense:cash_write_off": t("Cash written off"),
+    "suspense:cash_over": t("Unexplained extra cash"),
+  };
   for (const c of cList) names[`courier:${c.id}`] = `${t("Courier")} · ${c.name}`;
   for (const m of mList) names[`merchant:${m.id}`] = `${t("Merchant")} · ${m.name}`;
   return (
     <>
       <PageHeader title={t("Finance")} subtitle={t("A double-entry ledger: every dinar collected is traced from the recipient to the merchant.")} />
+      <FinanceNav here="/admin/finance" />
       <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
         <Stat label={t("Held by couriers")} value={money(sum(couriers))} unit={t("DZD")} />
         <Stat label={t("Company cash")} value={money(cash)} unit={t("DZD")} />

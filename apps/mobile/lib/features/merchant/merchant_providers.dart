@@ -33,3 +33,25 @@ final communesProvider = FutureProvider.family<List<Commune>, int>((ref, wilayaI
   final r = await ref.read(apiProvider).get('/wilayas/$wilayaId/communes');
   return (r['communes'] as List).map((e) => Commune.fromJson(e as Map<String, dynamic>)).toList();
 });
+
+class Payouts {
+  const Payouts({required this.available, required this.pending, required this.minimum, this.account, this.requests = const []});
+  final int available;
+  final int pending;
+  final int minimum;
+
+  /// method, account and holder, or null when not set up yet.
+  final Map<String, dynamic>? account;
+  final List<Map<String, dynamic>> requests;
+}
+
+final payoutsProvider = FutureProvider.autoDispose<Payouts>((ref) async {
+  final r = await ref.read(apiProvider).get('/merchant/payouts');
+  return Payouts(
+    available: (r['available'] as num).toInt(),
+    pending: (r['pending'] as num).toInt(),
+    minimum: (r['minimum'] as num).toInt(),
+    account: r['account'] as Map<String, dynamic>?,
+    requests: ((r['requests'] as List?) ?? const []).cast<Map<String, dynamic>>(),
+  );
+});

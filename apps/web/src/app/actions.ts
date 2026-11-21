@@ -23,6 +23,7 @@ import { ImportHeaderError, commitBatch, discardBatch, stageImport } from "@/ser
 import { sendMail } from "@/server/services/mail";
 import { CLAIM_KINDS, decideClaim, fileClaim } from "@/server/services/claims";
 import { deliver, setDeliverySettings } from "@/server/services/delivery";
+import { cancelPayout, createBatch, markBatchPaid, receiveCash, recordPay, removeFromBatch, requestPayout, resolveShortfall, setCompany, setPayRates, setPayoutDetails } from "@/server/services/money";
 import { DomainError, FAIL_REASONS, createParcel, getParcel, hubScanTarget, transition, type FailReason } from "@/server/services/parcels";
 import { rate, reschedule, setInstructions, verifyRecipient } from "@/server/services/recipient";
 import { optimiseCourierRoute } from "@/server/services/routes";
@@ -604,5 +605,133 @@ export async function recipientRateAction(_: FormState, fd: FormData): Promise<F
     await rate(await getDb(), await recipientGuard(fd), Number(str(fd, "stars")), str(fd, "comment"));
     refresh();
     return { ok: t("Thank you for your rating.") };
+  });
+}
+
+// ---------- money: payouts, cash checks, courier pay, company details ----------
+
+export async function payoutDetailsAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    await setPayoutDetails(await getDb(), s.merchantId!, {
+      method: fd.get("method") === "bank" ? "bank" : "ccp",
+      account: str(fd, "account"),
+      holder: str(fd, "holder"),
+      legalName: str(fd, "legalName"),
+      nif: str(fd, "nif"),
+      rc: str(fd, "rc"),
+    });
+    await log(s, "merchant.payout_details", "merchant", s.merchantId!, {});
+    refresh();
+    return { ok: t("Saved. Payouts go to this account from now on.") };
+  });
+}
+
+export async function requestPayoutAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const r = await requestPayout(await getDb(), s.merchantId!, amount(fd), s);
+    await log(s, "payout.requested", "payout", r.id, { amount: r.amount });
+    refresh();
+    return { ok: t("Requested. Finance sends transfers in batches, usually within two working days.") };
+  });
+}
+
+export async function cancelPayoutAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant", "admin");
+  return guard(async () => {
+    await cancelPayout(await getDb(), str(fd, "id"), s, str(fd, "note"));
+    await log(s, s.role === "admin" ? "payout.rejected" : "payout.cancelled", "payout", str(fd, "id"), {});
+    refresh();
+  });
+}
+
+export async function createBatchAction(): Promise<FormState> {
+  const s = await requireRole("admin");
+  let id = "";
+  const res = await guard(async () => {
+    const b = await createBatch(await getDb(), s);
+    await log(s, "payout.batch_created", "batch", b.id, { total: b.total, count: b.count });
+    id = b.id;
+  });
+  if (id) redirect(`/admin/finance/payouts/${id}`);
+  return res;
+}
+
+export async function markBatchPaidAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const b = await markBatchPaid(await getDb(), str(fd, "batchId"), str(fd, "reference"), s);
+    await log(s, "payout.batch_paid", "batch", b.id, { total: b.total, reference: b.reference });
+    kick();
+    refresh();
+    return { ok: t("Marked paid. Merchants have been told.") };
+  });
+}
+
+export async function removeFromBatchAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async () => {
+    await removeFromBatch(await getDb(), str(fd, "id"));
+    await log(s, "payout.removed_from_batch", "payout", str(fd, "id"), {});
+    refresh();
+  });
+}
+
+export async function receiveCashAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin", "hub");
+  let id = "";
+  const res = await guard(async () => {
+    const h = await receiveCash(await getDb(), { courierId: str(fd, "courierId"), counted: amount(fd), note: str(fd, "note") }, s);
+    await log(s, "cash.received", "handover", h.id, { expected: h.expected, counted: h.counted });
+    kick();
+    id = h.id;
+  });
+  if (id) redirect(`/receipt/${id}`);
+  return res;
+}
+
+export async function resolveShortfallAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async () => {
+    const how = str(fd, "how");
+    if (how !== "repaid" && how !== "written_off" && how !== "deducted") throw new DomainError("Choose how the shortfall is settled");
+    await resolveShortfall(await getDb(), str(fd, "id"), how, s);
+    await log(s, `cash.shortfall_${how}`, "handover", str(fd, "id"), {});
+    refresh();
+  });
+}
+
+export async function recordPayAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const r = await recordPay(await getDb(), str(fd, "month"), str(fd, "courierId"), s);
+    await log(s, "courier.pay_recorded", "user", str(fd, "courierId"), { month: r.month, total: r.total });
+    refresh();
+    return { ok: t("Pay recorded.") };
+  });
+}
+
+export async function payRatesAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const n = (k: string) => Number(str(fd, k));
+    const v = { perDelivery: n("perDelivery"), perPickup: n("perPickup"), bonusThreshold: n("bonusThreshold"), bonus: n("bonus") };
+    await setPayRates(await getDb(), v);
+    await log(s, "settings.courier_pay", "settings", "courierPay", v);
+    refresh();
+    return { ok: t("Saved.") };
+  });
+}
+
+export async function companyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const v = { legalName: str(fd, "legalName"), address: str(fd, "address"), nif: str(fd, "nif"), rc: str(fd, "rc"), nis: str(fd, "nis"), ai: str(fd, "ai"), phone: str(fd, "phone"), email: str(fd, "email") };
+    if (!v.legalName) throw new DomainError("Enter the company's legal name");
+    await setCompany(await getDb(), v);
+    await log(s, "settings.company", "settings", "company", {});
+    refresh();
+    return { ok: t("Saved.") };
   });
 }

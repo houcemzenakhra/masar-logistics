@@ -103,6 +103,11 @@ export function LinkButton({ variant, size, className, ...p }: ComponentProps<ty
   return <Link {...p} className={cx(btn(variant, size), className)} />;
 }
 
+/** A link to a file (a CSV or a template). A plain anchor, not a router link, so the client router never waits on a download. */
+export function DownloadButton({ variant, size, className, ...p }: ComponentProps<"a"> & { variant?: keyof typeof BTN; size?: "sm" | "md" }) {
+  return <a download {...p} className={cx(btn(variant, size), className)} />;
+}
+
 const FIELD = "h-10 w-full rounded-xl border border-line bg-surface px-3 text-sm placeholder:text-muted/70 focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20";
 
 export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {

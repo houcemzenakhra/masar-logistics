@@ -17,7 +17,7 @@ export default async function Team() {
   return (
     <>
       <PageHeader title={t("Team")} subtitle={t("Couriers, hub staff and operations accounts. Deactivating an account blocks its sign-in without deleting its history.")} />
-      <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
         <Card className="min-w-0">
           <Table head={["Name", "Role", "Hub", "Status", ""]} empty={staff.length === 0}>
             {staff.map((u) => (

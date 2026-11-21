@@ -47,6 +47,14 @@ export const merchants = pgTable("merchants", {
   address: text("address").notNull().default(""),
   /** Self-signups start as `pending` and cannot create orders until an admin approves them. */
   status: text("status", { enum: ["pending", "active", "suspended"] }).notNull().default("active"),
+  /** Where payouts go: a CCP account (Algérie Poste) or a bank account (RIB). */
+  payoutMethod: text("payout_method", { enum: ["ccp", "bank"] }),
+  payoutAccount: text("payout_account").notNull().default(""),
+  payoutHolder: text("payout_holder").notNull().default(""),
+  /** Legal identifiers printed on invoices, when the merchant is a registered business. */
+  legalName: text("legal_name").notNull().default(""),
+  nif: text("nif").notNull().default(""),
+  rc: text("rc").notNull().default(""),
   createdAt: createdAt(),
 });
 
@@ -254,7 +262,7 @@ export const parcelEvents = pgTable(
 /** Double-entry ledger. Every transaction's lines sum to zero. */
 export const ledgerTxns = pgTable("ledger_txns", {
   id: id(),
-  kind: text("kind", { enum: ["delivery", "return_fee", "handover", "payout", "claim"] }).notNull(),
+  kind: text("kind", { enum: ["delivery", "return_fee", "handover", "payout", "claim", "courier_pay", "cash_adjustment"] }).notNull(),
   parcelId: text("parcel_id").references(() => parcels.id),
   memo: text("memo").notNull().default(""),
   createdBy: text("created_by").references(() => users.id),
@@ -300,6 +308,80 @@ export const smsMessages = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }),
   },
   (t) => [index("sms_status_idx").on(t.status), index("sms_parcel_idx").on(t.parcelId)],
+);
+
+/** A merchant asking to be paid what is owed to them. Paid in batches by finance. */
+export const payoutRequests = pgTable(
+  "payout_requests",
+  {
+    id: id(),
+    code: text("code").notNull().unique(),
+    merchantId: text("merchant_id").notNull().references(() => merchants.id),
+    amount: integer("amount").notNull(),
+    status: text("status", { enum: ["requested", "in_batch", "paid", "rejected", "cancelled"] }).notNull().default("requested"),
+    /** Copied from the merchant when requested, so a later change does not redirect money in flight. */
+    method: text("method", { enum: ["ccp", "bank"] }).notNull(),
+    account: text("account").notNull(),
+    holder: text("holder").notNull(),
+    batchId: text("batch_id"),
+    note: text("note").notNull().default(""),
+    requestedBy: text("requested_by").references(() => users.id),
+    createdAt: createdAt(),
+    paidAt: timestamp("paid_at", { withTimezone: true }),
+  },
+  (t) => [index("payout_requests_merchant_idx").on(t.merchantId), index("payout_requests_status_idx").on(t.status)],
+);
+
+/** A transfer list sent to the bank or the post office, then marked paid with its reference. */
+export const payoutBatches = pgTable("payout_batches", {
+  id: id(),
+  code: text("code").notNull().unique(),
+  status: text("status", { enum: ["open", "paid"] }).notNull().default("open"),
+  total: integer("total").notNull(),
+  count: integer("count").notNull(),
+  reference: text("reference").notNull().default(""),
+  createdBy: text("created_by").references(() => users.id),
+  createdAt: createdAt(),
+  paidAt: timestamp("paid_at", { withTimezone: true }),
+});
+
+/** Cash a courier hands in at the hub, counted against what the system says they hold. */
+export const cashHandovers = pgTable(
+  "cash_handovers",
+  {
+    id: id(),
+    code: text("code").notNull().unique(),
+    courierId: text("courier_id").notNull().references(() => users.id),
+    hubId: text("hub_id").references(() => hubs.id),
+    expected: integer("expected").notNull(),
+    counted: integer("counted").notNull(),
+    /** expected − counted. Positive: money missing. Negative: more cash than expected. */
+    difference: integer("difference").notNull(),
+    note: text("note").notNull().default(""),
+    receivedBy: text("received_by").references(() => users.id),
+    /** A shortfall stays on the courier's account until it is repaid or written off. */
+    resolution: text("resolution", { enum: ["none", "repaid", "written_off", "deducted", "settled_by_pay"] }).notNull().default("none"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("cash_handovers_courier_idx").on(t.courierId, t.createdAt)],
+);
+
+/** Courier pay recorded for a month, once per courier. */
+export const courierPayRuns = pgTable(
+  "courier_pay_runs",
+  {
+    id: id(),
+    month: text("month").notNull(),
+    courierId: text("courier_id").notNull().references(() => users.id),
+    deliveries: integer("deliveries").notNull(),
+    pickups: integer("pickups").notNull(),
+    bonus: integer("bonus").notNull(),
+    deductions: integer("deductions").notNull(),
+    total: integer("total").notNull(),
+    paidBy: text("paid_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("courier_pay_runs_month_courier").on(t.month, t.courierId)],
 );
 
 /** What the courier recorded at the door: the recipient's code, a photo or a signature. */

@@ -55,6 +55,7 @@ class _CourierHomeState extends ConsumerState<CourierHome> with WidgetsBindingOb
     final refused = await ref.read(outboxProvider.notifier).flush();
     if (mounted && refused.isNotEmpty) toast(context, refused.join('\n'), error: true);
     ref.invalidate(courierTasksProvider);
+    ref.invalidate(receiptsProvider);
     await ref.read(dutyProvider.notifier).flush();
   }
 
@@ -342,6 +343,28 @@ class _CashTab extends ConsumerWidget {
               InfoRow(tr('Parcels with cash to collect'), '${t.deliveries.where((p) => p.codAmount > 0).length}'),
             ]),
           ),
+          SectionTitle(tr('Your receipts')),
+          ref.watch(receiptsProvider).when(
+                loading: () => const LinearProgressIndicator(),
+                error: (e, _) => const SizedBox.shrink(),
+                data: (list) => list.isEmpty
+                    ? EmptyState(tr('Receipts appear here each time you hand in cash at the hub.'), icon: Icons.receipt_long_outlined)
+                    : Column(children: [
+                        for (final r in list)
+                          Card(
+                            margin: const EdgeInsets.only(bottom: 6),
+                            child: ListTile(
+                              title: Ltr(r.code, style: const TextStyle(fontFamily: 'monospace', fontWeight: FontWeight.w600)),
+                              subtitle: Text(dateTime(r.at)),
+                              trailing: Column(mainAxisAlignment: MainAxisAlignment.center, crossAxisAlignment: CrossAxisAlignment.end, children: [
+                                Ltr(dzd(r.counted), style: const TextStyle(fontWeight: FontWeight.w700)),
+                                if (r.difference != 0)
+                                  Text(r.difference > 0 ? tr('{x} missing', {'x': dzd(r.difference)}) : tr('{x} extra', {'x': dzd(-r.difference)}), style: TextStyle(fontSize: 12, color: r.difference > 0 ? MasarColors.danger : MasarColors.warn)),
+                              ]),
+                            ),
+                          ),
+                      ]),
+              ),
         ]),
       ),
     );

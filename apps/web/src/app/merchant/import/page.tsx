@@ -31,7 +31,7 @@ export default async function Import() {
   return (
     <>
       <PageHeader title={t("Import orders")} subtitle={t("Upload a spreadsheet of orders. Every row is checked before anything is created, and you confirm at the end.")} />
-      <div className="grid gap-5 lg:grid-cols-[1fr_360px]">
+      <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
         <Card className="p-5 sm:p-6">
           <ActionForm action={importUploadAction} className="space-y-4">
             <label className="flex min-w-0 cursor-pointer flex-col overflow-hidden items-center justify-center gap-3 rounded-2xl border-2 border-dashed border-line bg-paper/60 px-6 py-10 text-center transition-colors hover:border-accent/50 hover:bg-accent-soft/40">
