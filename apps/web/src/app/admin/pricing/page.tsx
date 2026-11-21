@@ -1,11 +1,11 @@
-import { updateTierAction } from "@/app/actions";
+import { pricingSettingsAction, updateTierAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
 import { Card, Field, Input, PageHeader } from "@/components/ui";
 import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { INCLUDED_KG } from "@/server/domain/pricing";
-import { getTiers } from "@/server/services/parcels";
+import { getPricingSettings, getTiers } from "@/server/services/parcels";
 
 const WHEN = {
   local: "Origin and destination in the same wilaya",
@@ -16,7 +16,8 @@ const WHEN = {
 
 export default async function Pricing() {
   await requireRole("admin");
-  const tiers = await getTiers(await getDb());
+  const db = await getDb();
+  const [tiers, cfg] = await Promise.all([getTiers(db), getPricingSettings(db)]);
   return (
     <>
       <PageHeader title={t("Pricing")} subtitle={t("Flat rate per zone in DZD. The first {kg} kg are included. Changes apply to new orders only.", { kg: INCLUDED_KG })} />
@@ -35,6 +36,14 @@ export default async function Pricing() {
           </Card>
         ))}
       </div>
+      <Card className="mt-5 p-5">
+        <h2 className="text-[15px] font-semibold">{t("Large, light parcels")}</h2>
+        <p className="mt-0.5 max-w-2xl text-sm text-muted">{t("When a parcel's size is known, it is charged for its volume weight if that is more than its real weight: length × width × height in cm, divided by the number below. A 60 × 50 × 40 cm box counts as 24 kg at 5,000. Set 0 to charge by real weight only.")}</p>
+        <ActionForm action={pricingSettingsAction} className="mt-5 flex flex-wrap items-end gap-3">
+          <div className="w-36"><Field label={t("Divide by")}><Input name="divisor" type="number" min={0} max={10000} required defaultValue={cfg.divisor} dir="ltr" className="tnum" /></Field></div>
+          <Submit variant="dark">{t("Save")}</Submit>
+        </ActionForm>
+      </Card>
     </>
   );
 }

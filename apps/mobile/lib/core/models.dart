@@ -91,6 +91,7 @@ class Parcel {
     this.collectedAmount,
     this.kind = 'delivery',
     this.daysWaiting,
+    this.eta,
   });
 
   final String id;
@@ -147,6 +148,9 @@ class Parcel {
   /// On a stop desk shelf: days since it was put there.
   final int? daysWaiting;
 
+  /// Expected time at the door, from the planned route.
+  final DateTime? eta;
+
   bool get atDesk => deliveryType == 'desk';
   bool get awaitingConfirmation => confirmation == 'pending' && status == 'created';
 
@@ -200,6 +204,7 @@ class Parcel {
         collectedAmount: (j['collectedAmount'] as num?)?.toInt(),
         kind: (j['kind'] as String?) ?? 'delivery',
         daysWaiting: (j['daysWaiting'] as num?)?.toInt(),
+        eta: j['eta'] == null ? null : DateTime.tryParse(j['eta'] as String)?.toLocal(),
       );
 }
 

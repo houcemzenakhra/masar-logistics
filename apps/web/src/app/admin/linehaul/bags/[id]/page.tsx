@@ -10,7 +10,7 @@ import { money } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
-import { getBag } from "@/server/services/linehaul";
+import { bagReport, getBag } from "@/server/services/linehaul";
 import { listParcels } from "@/server/services/parcels";
 
 export default async function Bag({ params }: { params: Promise<{ id: string }> }) {
@@ -19,9 +19,11 @@ export default async function Bag({ params }: { params: Promise<{ id: string }> 
   const bag = await getBag(db, (await params).id);
   if (!bag) notFound();
   const open = bag.status === "open" && (s.role === "admin" || s.hubId === bag.originHubId);
-  const [inside, eligible] = await Promise.all([
+  const checking = bag.status === "received" && (s.role === "admin" || s.hubId === bag.destHubId);
+  const [inside, eligible, report] = await Promise.all([
     listParcels(db, { bagId: bag.id }),
     open ? listParcels(db, { baggable: { originHubId: bag.originHubId, destHubId: bag.destHubId } }) : [],
+    bag.status === "received" ? bagReport(db, bag.id) : null,
   ]);
   return (
     <>
@@ -68,6 +70,51 @@ export default async function Bag({ params }: { params: Promise<{ id: string }> 
           </ActionForm>
         </Card>
       )}
+
+      {report && checking && !bag.checkedAt && (
+        <Card className="mt-5">
+          <CardHeader
+            title={t("Check what arrived")}
+            hint={t("Scan every parcel taken out of the bag. Then finish: anything not scanned is reported missing.")}
+            action={<span className="tnum text-sm font-medium">{t("{a} of {b} scanned", { a: report.checked, b: report.expected.length })}</span>}
+          />
+          <div className="flex flex-wrap items-start gap-3 p-5">
+            <ActionForm action={bagAction} className="flex min-w-0 flex-1 flex-wrap gap-2">
+              <input type="hidden" name="op" value="check" />
+              <input type="hidden" name="bagId" value={bag.id} />
+              <Input name="tracking" required autoFocus placeholder="MSR…" aria-label={t("Tracking number")} autoComplete="off" dir="ltr" className="min-w-0 flex-1 font-mono sm:max-w-xs" />
+              <Submit>{t("Scan")}</Submit>
+            </ActionForm>
+            <ActionForm action={bagAction}>
+              <input type="hidden" name="op" value="finish" />
+              <input type="hidden" name="bagId" value={bag.id} />
+              <Submit variant="dark">{t("Finish check")}</Submit>
+            </ActionForm>
+          </div>
+          {report.extra.length > 0 && <p className="border-t border-line px-5 py-3 text-sm text-danger">{t("Should not be here: {x}", { x: report.extra.map((e) => e.tracking).join(", ") })}</p>}
+        </Card>
+      )}
+
+      {report && bag.checkedAt && (report.missing.length > 0 || report.extra.length > 0) && (
+        <Card className="mt-5 border-danger/30">
+          <CardHeader title={t("Check: something is off")} hint={t("Look for these parcels. Operations can mark a parcel lost from its page.")} />
+          <ul className="divide-y divide-line">
+            {report.missing.map((p) => (
+              <li key={p.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm">
+                <Link href={`/admin/parcels/${p.id}`} className="hover:underline"><Mono>{p.tracking}</Mono></Link>
+                <span className="text-danger">{t("Missing")} · <Money value={p.codAmount} /></span>
+              </li>
+            ))}
+            {report.extra.map((e) => (
+              <li key={e.id} className="flex flex-wrap items-center justify-between gap-2 px-5 py-3 text-sm">
+                {e.parcelId ? <Link href={`/admin/parcels/${e.parcelId}`} className="hover:underline"><Mono>{e.tracking}</Mono></Link> : <Mono>{e.tracking}</Mono>}
+                <span className="text-warn">{t("Found, belongs elsewhere")}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+      {report && bag.checkedAt && report.missing.length === 0 && report.extra.length === 0 && <p className="mt-5 rounded-xl bg-ok-soft px-4 py-3 text-sm text-ok">{t("Checked: everything is there.")}</p>}
 
       <Card className="mt-5">
         <CardHeader title={`${t("In this bag")} (${inside.length})`} />

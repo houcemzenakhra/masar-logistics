@@ -2,10 +2,10 @@ import { and, desc, eq, gt, inArray, ne, sql } from "drizzle-orm";
 import Papa from "papaparse";
 import { readSheet } from "read-excel-file/node";
 import type { Q } from "../db";
-import { quote, tierFor } from "../domain/pricing";
+import { chargeableKg, parseSize, quote, tierFor, type Size } from "../domain/pricing";
 import { normalizeMobile } from "../phone";
 import { communes, importBatches, merchants, parcels, rateTiers, wilayas } from "../schema";
-import { DomainError, createParcel, type Actor } from "./parcels";
+import { DomainError, createParcel, getPricingSettings, type Actor } from "./parcels";
 
 /**
  * Bulk orders from a spreadsheet. A file is read and every row checked first; the merchant sees
@@ -30,6 +30,9 @@ export type RowValues = {
   recipientLang: "fr" | "ar";
   /** The shop's order number, from a "ref" or "order" column. */
   externalRef?: string;
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
 };
 
 export type CheckedRow = {
@@ -46,7 +49,7 @@ export type CheckedRow = {
 
 // ---------- reading files ----------
 
-export const FIELDS = ["name", "phone", "wilaya", "commune", "address", "cod", "weight", "contents", "lang", "ref", "paid"] as const;
+export const FIELDS = ["name", "phone", "wilaya", "commune", "address", "cod", "weight", "contents", "lang", "ref", "paid", "size"] as const;
 type Field = (typeof FIELDS)[number];
 export const REQUIRED: Field[] = ["name", "phone", "wilaya", "commune", "address", "cod"];
 
@@ -63,6 +66,7 @@ const ALIASES: Record<Field, string[]> = {
   lang: ["lang", "language", "langue", "sms", "sms language", "langue sms", "اللغة"],
   ref: ["ref", "reference", "order", "order id", "order number", "order ref", "order reference", "order reference number", "commande", "n commande", "no commande", "numero de commande", "reference commande", "id commande", "رقم الطلب", "مرجع الطلب", "المرجع"],
   /** A payment status column: an order marked paid is not collected again. */
+  size: ["size", "dimensions", "dimensions cm", "size cm", "taille", "dimensions colis", "الابعاد", "المقاس"],
   paid: ["payment status", "financial status", "statut de paiement", "statut paiement", "paiement", "حاله الدفع"],
 };
 // Shop exports (YouCan and the like) name these differently.
@@ -249,7 +253,7 @@ function money(s: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-export type Ref = { wilayas: W[]; communes: C[]; tiers: (typeof rateTiers.$inferSelect)[]; origin: W };
+export type Ref = { wilayas: W[]; communes: C[]; tiers: (typeof rateTiers.$inferSelect)[]; origin: W; divisor?: number };
 
 export async function loadRef(q: Q, merchantId: string): Promise<Ref> {
   const [m] = await q.select().from(merchants).where(eq(merchants.id, merchantId));
@@ -259,7 +263,7 @@ export async function loadRef(q: Q, merchantId: string): Promise<Ref> {
     q.select({ id: communes.id, wilayaId: communes.wilayaId, name: communes.name, nameAr: communes.nameAr }).from(communes),
     q.select().from(rateTiers),
   ]);
-  return { wilayas: ws, communes: cs, tiers, origin: ws.find((w) => w.id === m.wilayaId)! };
+  return { wilayas: ws, communes: cs, tiers, origin: ws.find((w) => w.id === m.wilayaId)!, divisor: (await getPricingSettings(q)).divisor };
 }
 
 /** Checks one record keyed by field name. Used for spreadsheet rows and for the bulk API. */
@@ -308,6 +312,15 @@ export function checkRecord(rec: Partial<Record<Field, string>>, line: number, r
     else weight = Math.ceil(wv);
   }
 
+  let size: Size | null = null;
+  if (get("size")) {
+    size = parseSize(get("size"));
+    if (!size || [size.lengthCm, size.widthCm, size.heightCm].some((v) => !v || v > 300)) {
+      errors.push({ m: "Size “{x}” should read like 30x20x10 (cm, at most 300 each)", v: { x: get("size") } });
+      size = null;
+    }
+  }
+
   const l = norm(get("lang"));
   const lang: "fr" | "ar" = ["ar", "arabic", "arabe", "عربي", "العربية"].map(norm).includes(l) ? "ar" : "fr";
   const contents = get("contents").slice(0, 120);
@@ -317,8 +330,8 @@ export function checkRecord(rec: Partial<Record<Field, string>>, line: number, r
   return {
     line,
     raw,
-    values: { recipientName: name, recipientPhone: phone, destWilayaId: w.id, communeId: commune.id, address, codAmount: cod, weightKg: weight, description: contents || undefined, recipientLang: lang, externalRef: get("ref").slice(0, 80) || undefined },
-    shown: { wilaya: w.name, commune: commune.name, fee: quote(tier, weight).deliveryFee },
+    values: { recipientName: name, recipientPhone: phone, destWilayaId: w.id, communeId: commune.id, address, codAmount: cod, weightKg: weight, description: contents || undefined, recipientLang: lang, externalRef: get("ref").slice(0, 80) || undefined, ...(size ?? {}) },
+    shown: { wilaya: w.name, commune: commune.name, fee: quote(tier, chargeableKg(weight, size, ref.divisor)).deliveryFee },
     errors,
     warnings,
   };

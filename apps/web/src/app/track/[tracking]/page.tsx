@@ -1,4 +1,4 @@
-import { CalendarDays, MapPin, MessageSquareText, PackageSearch, ShieldCheck, Store } from "lucide-react";
+import { CalendarDays, Clock, MapPin, MessageSquareText, PackageSearch, ShieldCheck, Store } from "lucide-react";
 import { recipientConfirmAction, recipientInstructionsAction, recipientRateAction, recipientRescheduleAction, recipientVerifyAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
 import { StarInput } from "@/components/star-input";
@@ -10,7 +10,7 @@ import { rescheduleDays } from "@/server/services/recipient";
 import { SiteFooter, SiteNav, TrackForm } from "@/components/site";
 import { ProgressRail, Timeline } from "@/components/tracking";
 import { Card, StatusBadge } from "@/components/ui";
-import { ago, dateOnly, money } from "@/lib/format";
+import { ago, dateOnly, etaWindow, money } from "@/lib/format";
 import { initLocale, place, t } from "@/lib/i18n";
 import { getDb } from "@/server/db";
 import { getParcel } from "@/server/services/parcels";
@@ -72,6 +72,12 @@ export default async function Track({ params }: { params: Promise<{ tracking: st
                     )}
                   </div>
                 </div>
+              )}
+              {p.status === "out_for_delivery" && p.eta && (
+                <p className="mt-5 flex items-center gap-2 rounded-xl bg-info-soft px-4 py-3 text-sm font-medium text-info">
+                  <Clock size={16} className="shrink-0" />
+                  {t("Expected between {from} and {to}", etaWindow(p.eta))}
+                </p>
               )}
               {p.status === "out_for_delivery" && p.codAmount > 0 && (
                 <p className="mt-5 rounded-xl bg-accent-soft px-4 py-3 text-sm font-medium text-accent-deep">

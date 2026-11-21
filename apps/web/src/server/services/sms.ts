@@ -31,13 +31,17 @@ export const DESK_HOLD_DAYS = 7;
 
 // ---------- settings ----------
 
-export type SmsSettings = { enabled: Record<ParcelKind, boolean> };
+export type SmsSettings = {
+  enabled: Record<ParcelKind, boolean>;
+  /** `whatsapp`: recipients get WhatsApp messages, and a text message when WhatsApp cannot reach them. */
+  channel?: "sms" | "whatsapp";
+};
 const DEFAULTS: SmsSettings = { enabled: { confirm_order: true, ready_at_desk: true, out_for_delivery: true, attempt_failed: true, delivered: false } };
 
 export async function getSmsSettings(q: Q): Promise<SmsSettings> {
   const [r] = await q.select().from(settings).where(eq(settings.key, "sms"));
   const v = (r?.value ?? {}) as Partial<SmsSettings>;
-  return { enabled: { ...DEFAULTS.enabled, ...(v.enabled ?? {}) } };
+  return { enabled: { ...DEFAULTS.enabled, ...(v.enabled ?? {}) }, channel: v.channel === "whatsapp" ? "whatsapp" : "sms" };
 }
 
 export async function setSmsSettings(q: Q, v: SmsSettings) {
@@ -94,7 +98,7 @@ export async function queueParcelSms(q: Q, parcelId: string, kind: ParcelKind) {
   // One message per parcel, kind and delivery attempt, however often the event is replayed.
   const [m] = await q
     .insert(smsMessages)
-    .values({ to, body, kind, parcelId: p.id, dedupeKey: `${p.id}:${kind}:${p.attempts}` })
+    .values({ to, body, kind, channel: cfg.channel ?? "sms", parcelId: p.id, dedupeKey: `${p.id}:${kind}:${p.attempts}` })
     .onConflictDoNothing({ target: smsMessages.dedupeKey })
     .returning();
   return m ?? null;
@@ -152,6 +156,49 @@ export function provider(): Provider | null {
   };
 }
 
+/** WhatsApp refused for good (not on WhatsApp, blocked, template issue): send a text message instead. */
+export class WhatsAppRefused extends Error {}
+
+/**
+ * WhatsApp Business (Cloud API), configured with WHATSAPP_TOKEN and WHATSAPP_PHONE_ID. Messages
+ * to customers who have not written first must use an approved template: Masar sends the
+ * template named by WHATSAPP_TEMPLATE (default `masar_update`), in French or Arabic, with the
+ * whole message as its one body variable ("Masar: {{1}}"). Without those settings, WhatsApp
+ * messages are recorded as `simulated`, like text messages.
+ */
+export function whatsappProvider(): Provider | null {
+  const token = process.env.WHATSAPP_TOKEN;
+  const phoneId = process.env.WHATSAPP_PHONE_ID;
+  if (!token || !phoneId) return null;
+  return {
+    name: "whatsapp",
+    async send(to, text) {
+      const lang = /[\u0600-\u06FF]/.test(text) ? "ar" : "fr";
+      // A template variable cannot hold line breaks, tabs or long runs of spaces.
+      const param = text.replace(/^Masar: |^مسار: /, "").replace(/\s+/g, " ").slice(0, 1000);
+      const res = await fetch(`https://graph.facebook.com/v21.0/${phoneId}/messages`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: to.replace(/^\+/, ""),
+          type: "template",
+          template: { name: process.env.WHATSAPP_TEMPLATE ?? "masar_update", language: { code: lang }, components: [{ type: "body", parameters: [{ type: "text", text: param }] }] },
+        }),
+        signal: AbortSignal.timeout(10_000),
+      });
+      const reply = (await res.json().catch(() => ({}))) as { messages?: { id: string }[]; error?: { message?: string; code?: number } };
+      if (!res.ok) {
+        const why = `WhatsApp answered ${res.status}: ${reply.error?.message ?? ""} (${reply.error?.code ?? "?"})`.slice(0, 300);
+        // 4xx is about this recipient or the template, so trying again will not help; 429 and 5xx might.
+        if (res.status >= 400 && res.status < 500 && res.status !== 429) throw new WhatsAppRefused(why);
+        throw new Error(why);
+      }
+      return { id: reply.messages?.[0]?.id ?? null };
+    },
+  };
+}
+
 export const MAX_SEND_ATTEMPTS = 3;
 
 /**
@@ -160,7 +207,8 @@ export const MAX_SEND_ATTEMPTS = 3;
  * Messages stuck in `sending` for more than five minutes (a crashed instance) are picked up too.
  */
 export async function dispatch(q: Q, opts: { limit?: number; retry?: boolean; ids?: string[] } = {}) {
-  const p = provider();
+  const sms = provider();
+  const wa = whatsappProvider();
   const due = or(
     eq(smsMessages.status, "queued"),
     and(eq(smsMessages.status, "sending"), lt(smsMessages.createdAt, sql`now() - interval '5 minutes'`)),
@@ -177,28 +225,48 @@ export async function dispatch(q: Q, opts: { limit?: number; retry?: boolean; id
     if (rows.length === 0) return [];
     return tx
       .update(smsMessages)
-      .set({ status: "sending", attempts: sql`${smsMessages.attempts} + 1`, provider: p?.name ?? "none" })
+      .set({ status: "sending", attempts: sql`${smsMessages.attempts} + 1` })
       .where(inArray(smsMessages.id, rows.map((r) => r.id)))
       .returning();
   });
 
   let sent = 0;
   let failed = 0;
+  let simulated = 0;
+  const fallbacks: string[] = [];
   for (const m of claimed) {
+    const p = m.channel === "whatsapp" ? wa : sms;
     if (!p) {
-      await q.update(smsMessages).set({ status: "simulated", sentAt: new Date(), error: null }).where(eq(smsMessages.id, m.id));
+      await q.update(smsMessages).set({ status: "simulated", provider: "none", sentAt: new Date(), error: null }).where(eq(smsMessages.id, m.id));
+      simulated++;
       continue;
     }
     try {
       const r = await p.send(m.to, m.body);
-      await q.update(smsMessages).set({ status: "sent", sentAt: new Date(), providerId: r.id, error: null }).where(eq(smsMessages.id, m.id));
+      await q.update(smsMessages).set({ status: "sent", provider: p.name, sentAt: new Date(), providerId: r.id, error: null }).where(eq(smsMessages.id, m.id));
       sent++;
     } catch (e) {
-      await q.update(smsMessages).set({ status: "failed", error: (e as Error).message.slice(0, 500) }).where(eq(smsMessages.id, m.id));
+      const refused = e instanceof WhatsAppRefused;
+      // Never retried: the text message copy below takes over.
+      await q.update(smsMessages).set({ status: "failed", provider: p.name, attempts: refused ? MAX_SEND_ATTEMPTS : m.attempts, error: (e as Error).message.slice(0, 500) }).where(eq(smsMessages.id, m.id));
       failed++;
+      if (refused) {
+        const [copy] = await q
+          .insert(smsMessages)
+          .values({ to: m.to, body: m.body, kind: m.kind, channel: "sms", parcelId: m.parcelId, userId: m.userId, dedupeKey: m.dedupeKey ? `${m.dedupeKey}:sms` : null })
+          .onConflictDoNothing({ target: smsMessages.dedupeKey })
+          .returning();
+        if (copy) fallbacks.push(copy.id);
+      }
     }
   }
-  return { claimed: claimed.length, sent, failed, simulated: p ? 0 : claimed.length };
+  if (fallbacks.length) {
+    const r = await dispatch(q, { ids: fallbacks });
+    sent += r.sent;
+    failed += r.failed;
+    simulated += r.simulated;
+  }
+  return { claimed: claimed.length, sent, failed, simulated };
 }
 
 // ---------- reading ----------
@@ -213,6 +281,7 @@ export function listSms(q: Q, f: { parcelId?: string; status?: string; limit?: n
       to: smsMessages.to,
       body: smsMessages.body,
       kind: smsMessages.kind,
+      channel: smsMessages.channel,
       status: smsMessages.status,
       error: smsMessages.error,
       attempts: smsMessages.attempts,

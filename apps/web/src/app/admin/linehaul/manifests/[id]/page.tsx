@@ -6,11 +6,11 @@ import { ActionForm, Submit } from "@/components/forms";
 import { BagStatus, ManifestStatus, RouteLabel } from "@/components/linehaul-bits";
 import { PrintButton } from "@/components/print-button";
 import { Card, CardHeader, Money, Mono, Table, Td } from "@/components/ui";
-import { dateTime } from "@/lib/format";
+import { dateTime, money } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
-import { getManifest, listBags } from "@/server/services/linehaul";
+import { getManifest, listBags, manifestReport } from "@/server/services/linehaul";
 
 export default async function Manifest({ params }: { params: Promise<{ id: string }> }) {
   const s = await requireRole("admin", "hub");
@@ -20,9 +20,10 @@ export default async function Manifest({ params }: { params: Promise<{ id: strin
   const atOrigin = s.role === "admin" || s.hubId === m.originHubId;
   const atDest = s.role === "admin" || s.hubId === m.destHubId;
   const open = m.status === "open" && atOrigin;
-  const [loaded, ready] = await Promise.all([
+  const [loaded, ready, report] = await Promise.all([
     listBags(db, { manifestId: m.id }),
     open ? listBags(db, { unassigned: { originHubId: m.originHubId, destHubId: m.destHubId } }) : [],
+    m.status === "open" ? null : manifestReport(db, m.id),
   ]);
   const facts: [string, React.ReactNode][] = [
     ["Vehicle plate", <span key="v" className="ltr">{m.vehicle || "—"}</span>],
@@ -114,6 +115,38 @@ export default async function Manifest({ params }: { params: Promise<{ id: strin
           ))}
         </Table>
       </Card>
+
+      {report && (
+        <Card className="mt-5">
+          <CardHeader title={t("What arrived")} hint={t("Each bag is received, then checked parcel by parcel at {hub}.", { hub: t(m.dest) })} />
+          <dl className="grid grid-cols-2 gap-px bg-line sm:grid-cols-4">
+            {[
+              [t("Bags not received"), report.notReceived.length, report.notReceived.length > 0],
+              [t("Bags not checked yet"), report.unchecked.length, false],
+              [t("Parcels missing"), report.missing.length, report.missing.length > 0],
+              [t("Cash at stake"), `${money(report.codAtRisk)} ${t("DZD")}`, report.codAtRisk > 0],
+            ].map(([k, v, bad]) => (
+              <div key={String(k)} className="bg-surface p-4">
+                <dt className="text-xs text-muted">{k}</dt>
+                <dd className={`tnum mt-1 text-xl font-semibold ${bad ? "text-danger" : ""}`}>{v}</dd>
+              </div>
+            ))}
+          </dl>
+          {(report.missing.length > 0 || report.extra.length > 0 || report.notReceived.length > 0) && (
+            <ul className="divide-y divide-line border-t border-line">
+              {report.notReceived.map((b) => (
+                <li key={b.id} className="flex justify-between gap-3 px-5 py-3 text-sm"><Link href={`/admin/linehaul/bags/${b.id}`} className="font-mono hover:underline">{b.code}</Link><span className="text-danger">{t("Bag not received")}</span></li>
+              ))}
+              {report.missing.map((p) => (
+                <li key={p.id} className="flex justify-between gap-3 px-5 py-3 text-sm"><Link href={`/admin/parcels/${p.id}`} className="font-mono hover:underline">{p.tracking}</Link><span className="text-danger">{t("Missing")} · {money(p.codAmount)} {t("DZD")}</span></li>
+              ))}
+              {report.extra.map((e) => (
+                <li key={e.id} className="flex justify-between gap-3 px-5 py-3 text-sm"><span className="font-mono">{e.tracking}</span><span className="text-warn">{t("Found in {bag}, belongs elsewhere", { bag: e.bagCode })}</span></li>
+              ))}
+            </ul>
+          )}
+        </Card>
+      )}
     </>
   );
 }

@@ -7,10 +7,13 @@ import '../core/theme.dart';
 
 /// Result of handling one scanned code in continuous mode: shown in the log under the camera.
 class ScanResult {
-  const ScanResult(this.code, this.message, {this.ok = true});
+  const ScanResult(this.code, this.message, {this.ok = true, this.lane});
   final String code;
   final String message;
   final bool ok;
+
+  /// The hub's sorting lane for this parcel, shown large so it can be read at arm's length.
+  final String? lane;
 }
 
 /// Camera barcode scanner, with a box to type the number when a label is damaged.
@@ -169,6 +172,13 @@ class _ScanScreenState extends State<ScanScreen> {
                               Text(r.message, style: const TextStyle(fontSize: 13)),
                             ]),
                           ),
+                          if (r.lane != null)
+                            Container(
+                              margin: const EdgeInsetsDirectional.only(start: 8),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                              decoration: BoxDecoration(color: MasarColors.navy, borderRadius: BorderRadius.circular(10)),
+                              child: Text(r.lane!, style: const TextStyle(color: Colors.white, fontFamily: 'monospace', fontSize: 26, fontWeight: FontWeight.w800)),
+                            ),
                         ]),
                       );
                     },

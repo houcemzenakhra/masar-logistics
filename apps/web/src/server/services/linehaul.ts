@@ -1,8 +1,8 @@
 import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Q } from "../db";
-import { bags, hubs, manifests, parcels } from "../schema";
-import { hubUsers, notify } from "./notify";
+import { bagChecks, bags, hubs, manifests, parcels } from "../schema";
+import { admins, hubUsers, notify } from "./notify";
 import { DomainError, transition, type Actor } from "./parcels";
 
 /**
@@ -119,6 +119,8 @@ const bagView = {
   manifestId: bags.manifestId,
   manifestCode: manifests.code,
   createdAt: bags.createdAt,
+  receivedAt: bags.receivedAt,
+  checkedAt: bags.checkedAt,
   parcels: sql<number>`(select count(*)::int from parcels p where p.bag_id = bags.id)`,
   cod: sql<number>`(select coalesce(sum(p.cod_amount), 0)::int from parcels p where p.bag_id = bags.id)`,
 };
@@ -238,4 +240,75 @@ export const listManifests = (q: Q) => manifestQuery(q).orderBy(desc(manifests.c
 export async function getManifest(q: Q, id: string) {
   const [m] = await manifestQuery(q).where(eq(manifests.id, id));
   return m ?? null;
+}
+
+// ---------- checking what arrived ----------
+
+/**
+ * After a bag is received, the hub scans each parcel in it. A parcel that belongs to the bag is
+ * `ok`; one that does not (another bag, or none) is `extra`. Scanning twice changes nothing.
+ */
+export async function checkBagParcel(q: Q, a: { bagId: string; tracking: string }, actor: Actor) {
+  const [bag] = await q.select().from(bags).where(eq(bags.id, a.bagId));
+  if (!bag) throw new DomainError("Bag not found");
+  atHub(actor, bag.destHubId, "check this bag");
+  if (bag.status !== "received") throw new DomainError(`Receive bag ${bag.code} before checking it`);
+  if (bag.checkedAt) throw new DomainError(`Bag ${bag.code} was already checked`);
+  const tracking = a.tracking.trim().toUpperCase();
+  const [p] = await q.select({ id: parcels.id, bagId: parcels.bagId }).from(parcels).where(eq(parcels.tracking, tracking));
+  const result = p?.bagId === bag.id ? "ok" : "extra";
+  const [row] = await q
+    .insert(bagChecks)
+    .values({ bagId: bag.id, parcelId: p?.id ?? null, tracking, result, actorId: actor.userId })
+    .onConflictDoNothing({ target: [bagChecks.bagId, bagChecks.tracking] })
+    .returning();
+  return { result, again: !row, known: !!p };
+}
+
+/** What a bag should hold against what was scanned out of it. */
+export async function bagReport(q: Q, bagId: string) {
+  const [expected, checks] = await Promise.all([
+    q.select({ id: parcels.id, tracking: parcels.tracking, status: parcels.status, codAmount: parcels.codAmount, recipientName: parcels.recipientName }).from(parcels).where(eq(parcels.bagId, bagId)).orderBy(parcels.tracking),
+    q.select().from(bagChecks).where(eq(bagChecks.bagId, bagId)).orderBy(bagChecks.createdAt),
+  ]);
+  const seen = new Set(checks.filter((c) => c.result === "ok").map((c) => c.parcelId));
+  const missing = expected.filter((p) => !seen.has(p.id) && p.status !== "lost");
+  return { expected, checked: seen.size, missing, extra: checks.filter((c) => c.result === "extra"), lost: expected.filter((p) => p.status === "lost") };
+}
+
+/**
+ * Closes the check of a bag. Parcels never scanned are reported missing to operations, who can
+ * look for them or mark them lost; parcels found in the wrong bag are reported too.
+ */
+export async function finishBagCheck(q: Q, bagId: string, actor: Actor) {
+  return q.transaction(async (tx) => {
+    const [bag] = await tx.select().from(bags).where(eq(bags.id, bagId)).for("update");
+    if (!bag) throw new DomainError("Bag not found");
+    atHub(actor, bag.destHubId, "check this bag");
+    if (bag.status !== "received") throw new DomainError(`Receive bag ${bag.code} before checking it`);
+    if (bag.checkedAt) throw new DomainError(`Bag ${bag.code} was already checked`);
+    const r = await bagReport(tx, bag.id);
+    await tx.update(bags).set({ checkedAt: new Date() }).where(eq(bags.id, bag.id));
+    if (r.missing.length || r.extra.length) {
+      await notify(tx, await admins(tx), "shortage", { code: bag.code, missing: r.missing.length, extra: r.extra.length }, { bagId: bag.id }, `${bag.id}:shortage`);
+    }
+    return r;
+  });
+}
+
+/** For a truck run: each bag's state and what is missing or extra, with the cash at stake. */
+export async function manifestReport(q: Q, manifestId: string) {
+  const list = await q.select().from(bags).where(eq(bags.manifestId, manifestId)).orderBy(bags.code);
+  const rows = [];
+  for (const b of list) rows.push({ bag: b, ...(await bagReport(q, b.id)) });
+  const missing = rows.flatMap((r) => (r.bag.checkedAt ? r.missing : []));
+  return {
+    bags: rows,
+    notReceived: rows.filter((r) => r.bag.status !== "received").map((r) => r.bag),
+    unchecked: rows.filter((r) => r.bag.status === "received" && !r.bag.checkedAt).map((r) => r.bag),
+    missing,
+    extra: rows.flatMap((r) => r.extra.map((e) => ({ ...e, bagCode: r.bag.code }))),
+    codAtRisk: missing.reduce((a, p) => a + p.codAmount, 0),
+    parcels: rows.reduce((a, r) => a + r.expected.length, 0),
+  };
 }

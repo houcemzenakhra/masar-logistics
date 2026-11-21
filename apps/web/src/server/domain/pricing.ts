@@ -20,4 +20,26 @@ export function quote(tier: Tier, weightKg: number) {
   };
 }
 
+/** Length × width × height in cm divided by this gives a weight in kg. Couriers' usual figure. */
+export const DEFAULT_VOLUME_DIVISOR = 5000;
+export type Size = { lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null };
+
+/**
+ * The weight a parcel is charged for: its real weight, or its volume weight when that is more, so
+ * a large light box pays for the room it takes. `divisor` 0 turns volume pricing off.
+ */
+export function chargeableKg(weightKg: number, size: Size | null | undefined, divisor = DEFAULT_VOLUME_DIVISOR) {
+  const { lengthCm: l, widthCm: w, heightCm: h } = size ?? {};
+  const volume = divisor > 0 && l && w && h ? (l * w * h) / divisor : 0;
+  return Math.ceil(Math.max(weightKg, volume));
+}
+
+/** Reads "30x20x10", "30 × 20 × 10" or "30*20*10" (cm). */
+export function parseSize(s: string): Size | null {
+  const m = /(\d+(?:[.,]\d+)?)\s*[x×*]\s*(\d+(?:[.,]\d+)?)\s*[x×*]\s*(\d+(?:[.,]\d+)?)/i.exec(s);
+  if (!m) return null;
+  const [l, w, h] = m.slice(1).map((v) => Math.ceil(Number(v.replace(",", "."))));
+  return { lengthCm: l, widthCm: w, heightCm: h };
+}
+
 export const dzd = (n: number) => `${new Intl.NumberFormat("en-US").format(n)} DZD`;

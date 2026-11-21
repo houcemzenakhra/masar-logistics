@@ -43,6 +43,10 @@ const Body = z.object({
   exchangeNote: z.string().trim().max(200).optional(),
   /** Your own order number. Sending the same one again answers 409 with the tracking number. */
   externalRef: z.string().trim().min(1).max(80).optional(),
+  /** Outer size in cm. A large light parcel is charged by volume (L × W × H ÷ 5000 kg). */
+  lengthCm: z.number().min(1).max(300).optional(),
+  widthCm: z.number().min(1).max(300).optional(),
+  heightCm: z.number().min(1).max(300).optional(),
 }).refine((b) => b.deliveryType === "desk" || !!b.address, { message: "address is required for home delivery", path: ["address"] });
 
 export const POST = route(async (req) => {

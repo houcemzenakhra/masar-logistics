@@ -61,3 +61,39 @@ export function optimise<T extends Stop>(start: Point, stops: T[]): { order: T[]
   }
   return { order: route, km: pathKm(start, route) };
 }
+
+/**
+ * The same ordering from a travel cost matrix (seconds by road, say), where index 0 is the start
+ * and 1..n are the stops. Returns stop indexes in visiting order and the total cost.
+ */
+export function optimiseMatrix(cost: number[][]): { order: number[]; total: number } {
+  const n = cost.length - 1;
+  const left = Array.from({ length: n }, (_, i) => i + 1);
+  const route: number[] = [];
+  let at = 0;
+  while (left.length) {
+    let best = 0;
+    for (let i = 1; i < left.length; i++) if (cost[at][left[i]] < cost[at][left[best]]) best = i;
+    at = left[best];
+    route.push(left.splice(best, 1)[0]);
+  }
+  const total = (r: number[]) => r.reduce((sum, s, i) => sum + cost[i === 0 ? 0 : r[i - 1]][s], 0);
+  let current = total(route);
+  let improved = route.length > 2;
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < route.length - 1; i++) {
+      for (let j = i + 1; j < route.length; j++) {
+        // Road times are not symmetric, so each reversal is costed in full.
+        const next = [...route.slice(0, i), ...route.slice(i, j + 1).reverse(), ...route.slice(j + 1)];
+        const t = total(next);
+        if (t < current - 1e-9) {
+          route.splice(0, route.length, ...next);
+          current = t;
+          improved = true;
+        }
+      }
+    }
+  }
+  return { order: route, total: current };
+}

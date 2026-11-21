@@ -248,9 +248,10 @@ class _StopTile extends StatelessWidget {
                 Text(pickup ? p.merchantName : p.recipientName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
                 const SizedBox(height: 2),
                 Text(pickup ? p.tracking : '${p.address}, ${p.place}', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: MasarColors.ink2, fontSize: 13.5)),
-                if (!pickup && (p.instructions.isNotEmpty || p.preferredDate != null || p.exchange || p.allowPartial)) ...[
+                if (!pickup && (p.instructions.isNotEmpty || p.preferredDate != null || p.exchange || p.allowPartial || p.eta != null)) ...[
                   const SizedBox(height: 6),
                   Wrap(spacing: 6, runSpacing: 4, children: [
+                    if (p.eta != null) Pill('~${p.eta!.hour.toString().padLeft(2, '0')}:${p.eta!.minute.toString().padLeft(2, '0')}', color: MasarColors.muted),
                     if (p.exchange) Pill(tr('Exchange'), color: MasarColors.info),
                     if (p.allowPartial) Pill(tr('Partial delivery allowed'), color: MasarColors.muted),
                     if (p.instructions.isNotEmpty) Pill(tr('Note from recipient'), color: MasarColors.info),

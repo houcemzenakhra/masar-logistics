@@ -4,6 +4,7 @@ import { getDb } from "@/server/db";
 import type { Status } from "@/server/domain/state";
 import { receiveBag } from "@/server/services/linehaul";
 import { DomainError, getParcel, hubScanTarget, transition } from "@/server/services/parcels";
+import { zoneFor } from "@/server/services/sorting";
 
 const Body = z.object({ tracking: z.string().min(3), direction: z.enum(["in", "out"]), idempotencyKey: z.string().min(8).max(80).optional() });
 
@@ -22,5 +23,8 @@ export const POST = route(async (req) => {
   const to = hubScanTarget(p.status as Status, b.direction);
   if (!to) throw new DomainError(`${p.tracking} is "${p.status}": nothing to scan ${b.direction} here`);
   const parcel = await transition(db, { parcelId: p.id, to, actor: s, idempotencyKey: b.idempotencyKey });
-  return json({ parcel });
+  // Where to put it on the floor, when the hub has sorting lanes.
+  const hubId = to === "at_origin_hub" ? p.originHubId : to === "at_destination_hub" ? p.destHubId : null;
+  const zone = hubId ? await zoneFor(db, hubId, p) : null;
+  return json({ parcel, lane: zone ? { code: zone.code, name: zone.name } : null });
 });

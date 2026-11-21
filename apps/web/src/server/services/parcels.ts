@@ -2,10 +2,10 @@ import { and, desc, eq, ilike, inArray, or, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Session } from "../auth";
 import type { Q } from "../db";
-import { quote, tierFor, type Tier } from "../domain/pricing";
+import { DEFAULT_VOLUME_DIVISOR, chargeableKg, quote, tierFor, type Size, type Tier } from "../domain/pricing";
 import { normalizeMobile } from "../phone";
 import { MAX_ATTEMPTS, canTransition, type Status } from "../domain/state";
-import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, stopDesks, users, wilayas } from "../schema";
+import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, settings, stopDesks, users, wilayas } from "../schema";
 import { deskFee, getDeskSettings } from "./desks";
 import { parcelEventData, queueWebhook } from "./integrations";
 import { acct, post } from "./ledger";
@@ -81,6 +81,10 @@ const view = {
   kind: parcels.kind,
   parentId: parcels.parentId,
   externalRef: parcels.externalRef,
+  lengthCm: parcels.lengthCm,
+  widthCm: parcels.widthCm,
+  heightCm: parcels.heightCm,
+  eta: parcels.eta,
   createdAt: parcels.createdAt,
   updatedAt: parcels.updatedAt,
   deliveredAt: parcels.deliveredAt,
@@ -163,6 +167,36 @@ export async function getParcel(q: Q, key: { id: string } | { tracking: string }
   return { ...p, events };
 }
 
+export type PricingSettings = { /** 0: volume pricing off. */ divisor: number };
+
+export async function getPricingSettings(q: Q): Promise<PricingSettings> {
+  const [r] = await q.select().from(settings).where(eq(settings.key, "pricing"));
+  const v = (r?.value ?? {}) as Partial<PricingSettings>;
+  return { divisor: typeof v.divisor === "number" ? v.divisor : DEFAULT_VOLUME_DIVISOR };
+}
+
+export async function setPricingSettings(q: Q, v: PricingSettings) {
+  if (!Number.isInteger(v.divisor) || v.divisor < 0 || v.divisor > 10000) throw new DomainError("The volume divisor must be between 0 (off) and 10,000");
+  await q.insert(settings).values({ key: "pricing", value: v }).onConflictDoUpdate({ target: settings.key, set: { value: v, updatedAt: new Date() } });
+}
+
+/** Sizes must be whole centimetres, 1 to 300, and given all three or not at all. */
+function checkSize(s: Size): Size {
+  const vals = [s.lengthCm, s.widthCm, s.heightCm];
+  if (vals.every((v) => v == null)) return { lengthCm: null, widthCm: null, heightCm: null };
+  if (vals.some((v) => v == null || !Number.isFinite(v) || v < 1 || v > 300)) throw new DomainError("Give length, width and height in cm, each from 1 to 300");
+  const [lengthCm, widthCm, heightCm] = vals.map((v) => Math.ceil(v!));
+  return { lengthCm, widthCm, heightCm };
+}
+
+/** Fees for a parcel between two wilayas, by its chargeable weight, with the stop desk discount. */
+async function priceFor(tx: Q, a: { origin: { id: number; zone: number }; dest: { id: number; zone: number }; weightKg: number; size: Size; desk: boolean }) {
+  const [tier] = await tx.select().from(rateTiers).where(eq(rateTiers.key, tierFor(a.origin, a.dest)));
+  const kg = chargeableKg(a.weightKg, a.size, (await getPricingSettings(tx)).divisor);
+  const price = quote(tier, kg);
+  return { deliveryFee: a.desk ? deskFee(price.deliveryFee, await getDeskSettings(tx)) : price.deliveryFee, returnFee: price.returnFee, chargeableKg: kg };
+}
+
 export async function getTiers(q: Q): Promise<Tier[]> {
   const order = ["local", "north", "highlands", "south"];
   const rows = await q.select().from(rateTiers);
@@ -200,6 +234,10 @@ export type NewParcel = {
   exchangeNote?: string;
   /** The merchant's own order number. An order with a number already used is refused. */
   externalRef?: string;
+  /** Outer size in cm; large light parcels are charged by volume. */
+  lengthCm?: number | null;
+  widthCm?: number | null;
+  heightCm?: number | null;
 };
 
 export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = new Date()) {
@@ -238,9 +276,9 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
     const origin = ws.find((w) => w.id === m.wilayaId);
     const dest = ws.find((w) => w.id === input.destWilayaId);
     if (!origin || !dest) throw new DomainError("Unknown wilaya");
-    const [tier] = await tx.select().from(rateTiers).where(eq(rateTiers.key, tierFor(origin, dest)));
-    const price = quote(tier, input.weightKg);
-    const fee = desk ? deskFee(price.deliveryFee, await getDeskSettings(tx)) : price.deliveryFee;
+    const size = checkSize(input);
+    const price = await priceFor(tx, { origin, dest, weightKg: input.weightKg, size, desk: !!desk });
+    const fee = price.deliveryFee;
     const [p] = await tx
       .insert(parcels)
       .values({
@@ -255,6 +293,7 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
         exchangeNote: input.exchange ? input.exchangeNote!.trim().slice(0, 200) : "",
         confirmation: m.confirmOrders ? "pending" : "none",
         externalRef,
+        ...size,
         description: input.description ?? "",
         tracking: newTracking(),
         originWilayaId: origin.id,
@@ -527,6 +566,35 @@ async function createReturnLeg(tx: Q, p: typeof parcels.$inferSelect, what: stri
     .returning();
   await tx.insert(parcelEvents).values({ parcelId: leg.id, status: "return_initiated", note: what.slice(0, 300), actorId: actor.userId, hubId: courierId ? null : p.destHubId, createdAt: at });
   return leg;
+}
+
+/**
+ * The hub weighs or measures a parcel and the fees follow, until it is delivered or returned.
+ * The merchant sees the change in the parcel's history.
+ */
+export async function measureParcel(db: Q, a: { parcelId: string; weightKg: number; lengthCm?: number | null; widthCm?: number | null; heightCm?: number | null }, actor: Actor) {
+  if (actor.role !== "hub" && actor.role !== "admin") throw new DomainError("Only hub teams and operations measure parcels");
+  if (!(a.weightKg > 0 && a.weightKg <= 70)) throw new DomainError("Weight must be between 0.1 and 70 kg");
+  const size = checkSize(a);
+  return db.transaction(async (tx) => {
+    const [p] = await tx.select().from(parcels).where(eq(parcels.id, a.parcelId)).for("update");
+    if (!p) throw new DomainError("Parcel not found");
+    if (["delivered", "returned", "cancelled", "lost"].includes(p.status) || p.kind !== "delivery") throw new DomainError("This parcel's fees are settled");
+    if (actor.role === "hub" && p.currentHubId !== actor.hubId) throw new DomainError("Measure parcels on your hub's floor");
+    const ws = await tx.select().from(wilayas).where(inArray(wilayas.id, [p.originWilayaId, p.destWilayaId]));
+    const price = await priceFor(tx, { origin: ws.find((w) => w.id === p.originWilayaId)!, dest: ws.find((w) => w.id === p.destWilayaId)!, weightKg: a.weightKg, size, desk: p.deliveryType === "desk" });
+    const weightKg = Math.ceil(a.weightKg);
+    const [updated] = await tx.update(parcels).set({ weightKg, ...size, deliveryFee: price.deliveryFee, returnFee: price.returnFee, updatedAt: new Date() }).where(eq(parcels.id, p.id)).returning();
+    const dims = size.lengthCm ? `, ${size.lengthCm}×${size.widthCm}×${size.heightCm} cm` : "";
+    await tx.insert(parcelEvents).values({
+      parcelId: p.id,
+      status: p.status,
+      note: `Measured at the hub: ${weightKg} kg${dims}, charged as ${price.chargeableKg} kg. Fee ${p.deliveryFee} → ${price.deliveryFee} DZD`,
+      actorId: actor.userId,
+      hubId: p.currentHubId,
+    });
+    return { before: p.deliveryFee, after: price.deliveryFee, chargeableKg: price.chargeableKg, parcel: updated };
+  });
 }
 
 /** What a hub scan means depends on where the parcel is. */

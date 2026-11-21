@@ -4,7 +4,16 @@ import { createContext, startTransition, useActionState, useContext, useState, t
 import { useFormStatus } from "react-dom";
 import { useT } from "./i18n-client";
 
-export type FormState = { error?: string; ok?: string; /** Shown once, with a copy button: a new API key. */ secret?: string } | undefined;
+export type FormState =
+  | {
+      error?: string;
+      ok?: string;
+      /** Shown once, with a copy button: a new API key. */
+      secret?: string;
+      /** Shown large, to read from a distance: the sorting lane after a scan. */
+      big?: string;
+    }
+  | undefined;
 type Action = (prev: FormState, fd: FormData) => Promise<FormState>;
 
 const Pending = createContext(false);
@@ -36,6 +45,11 @@ export function ActionForm({ action, className, children }: { action: Action; cl
         </p>
       )}
       {state?.secret && <SecretBox value={state.secret} />}
+      {state?.big && (
+        <p aria-live="polite" className="mt-2 basis-full rounded-xl bg-navy px-4 py-3 text-center font-mono text-4xl font-bold tracking-wide text-white">
+          {state.big}
+        </p>
+      )}
     </form>
   );
 }

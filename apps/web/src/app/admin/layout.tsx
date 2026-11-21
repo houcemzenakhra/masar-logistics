@@ -7,9 +7,11 @@ export const metadata = { title: "Operations" };
 const ADMIN: NavItem[] = [
   { href: "/admin", label: "Overview", icon: "dashboard", exact: true },
   { href: "/admin/parcels", label: "Parcels", icon: "package" },
+  { href: "/admin/analytics", label: "Analytics", icon: "chart" },
   { href: "/admin/dispatch", label: "Dispatch", icon: "send" },
   { href: "/admin/live", label: "Live map", icon: "map" },
   { href: "/admin/scan", label: "Hub scan", icon: "scan" },
+  { href: "/admin/sorting", label: "Sorting lanes", icon: "lanes" },
   { href: "/admin/linehaul", label: "Linehaul", icon: "truck" },
   { href: "/admin/couriers", label: "Couriers", icon: "users" },
   { href: "/admin/merchants", label: "Merchants", icon: "store" },
@@ -23,7 +25,7 @@ const ADMIN: NavItem[] = [
   { href: "/admin/audit", label: "Audit log", icon: "audit" },
   { href: "/admin/settings", label: "Settings", icon: "settings" },
 ];
-const HUB = ["/admin/scan", "/admin/desks", "/admin/linehaul", "/admin/parcels", "/admin/dispatch", "/admin/live", "/admin/finance/cash"];
+const HUB = ["/admin/scan", "/admin/sorting", "/admin/desks", "/admin/linehaul", "/admin/parcels", "/admin/dispatch", "/admin/live", "/admin/finance/cash"];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const s = await requireRole("admin", "hub");

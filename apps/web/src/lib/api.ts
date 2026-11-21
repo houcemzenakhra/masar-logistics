@@ -5,6 +5,7 @@ import type { Role } from "@/server/domain/state";
 import { DomainError, DuplicateOrderError } from "@/server/services/parcels";
 import { IntegrationError } from "@/server/services/integrations";
 import { PickupError } from "@/server/services/pickups";
+import { SortingError } from "@/server/services/sorting";
 import { DeskError } from "@/server/services/desks";
 
 export const json = (data: unknown, status = 200) => Response.json(data, { status });
@@ -34,7 +35,7 @@ export function route<C>(fn: (req: Request, ctx: C) => Promise<Response>) {
       if (e instanceof HttpError) return fail(e.status, e.message);
       // Sending the same shop order twice is safe: the caller learns the tracking number it already has.
       if (e instanceof DuplicateOrderError) return Response.json({ error: e.message, code: "duplicate_order", tracking: e.tracking, externalRef: e.externalRef }, { status: 409 });
-      if (e instanceof IntegrationError || e instanceof PickupError) return fail(422, e.message);
+      if (e instanceof IntegrationError || e instanceof PickupError || e instanceof SortingError) return fail(422, e.message);
       if (e instanceof DomainError || e instanceof DeskError) return fail(422, e.message);
       if (e instanceof z.ZodError) return fail(400, e.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
       if (e instanceof SyntaxError) return fail(400, "Body must be JSON");

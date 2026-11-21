@@ -7,7 +7,7 @@ import { dateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
-import { MAX_SEND_ATTEMPTS, PARCEL_KINDS, displayTo, getSmsSettings, listSms, provider, renderParcelSms, segments, smsStats } from "@/server/services/sms";
+import { MAX_SEND_ATTEMPTS, PARCEL_KINDS, whatsappProvider, displayTo, getSmsSettings, listSms, provider, renderParcelSms, segments, smsStats } from "@/server/services/sms";
 
 export const metadata = { title: "Text messages" };
 
@@ -36,6 +36,7 @@ export default async function Sms({ searchParams }: { searchParams: Promise<{ st
   const db = await getDb();
   const [cfg, stats, list] = await Promise.all([getSmsSettings(db), smsStats(db, 7), listSms(db, { status, limit: 100 })]);
   const live = provider();
+  const wa = whatsappProvider();
   const failed = list.filter((m) => m.status === "failed" && m.attempts < MAX_SEND_ATTEMPTS);
   const chip = (on: boolean) => `whitespace-nowrap rounded-full px-3 py-1.5 text-[13px] font-medium ring-1 ring-inset ${on ? "bg-navy text-white ring-navy" : "bg-surface text-ink-2 ring-line hover:bg-paper"}`;
 
@@ -59,6 +60,15 @@ export default async function Sms({ searchParams }: { searchParams: Promise<{ st
         <Card className="min-w-0">
           <CardHeader title={t("Messages to recipients")} hint={t("Previews use sample values. French messages avoid accents so they fit in one SMS part.")} />
           <ActionForm action={smsSettingsAction}>
+            <fieldset className="border-b border-line p-5">
+              <legend className="sr-only">{t("Send by")}</legend>
+              <p className="text-sm font-medium">{t("Send by")}</p>
+              <div className="mt-2 flex flex-wrap gap-4 text-sm">
+                <label className="flex items-center gap-2"><input type="radio" name="channel" value="sms" defaultChecked={cfg.channel !== "whatsapp"} className="accent-[#ff5b24]" /> {t("Text message")}</label>
+                <label className="flex items-center gap-2"><input type="radio" name="channel" value="whatsapp" defaultChecked={cfg.channel === "whatsapp"} className="accent-[#ff5b24]" /> {t("WhatsApp, then a text message if WhatsApp cannot reach them")}</label>
+              </div>
+              <p className="mt-2 text-xs text-muted">{wa ? t("WhatsApp is connected.") : t("WhatsApp is not connected: messages are recorded but not sent until WHATSAPP_TOKEN and WHATSAPP_PHONE_ID are set, with an approved template named masar_update.")}</p>
+            </fieldset>
             <ul className="divide-y divide-line">
               {PARCEL_KINDS.map((k) => {
                 const fr = renderParcelSms(k, "fr", SAMPLE);
@@ -129,7 +139,7 @@ export default async function Sms({ searchParams }: { searchParams: Promise<{ st
             <tr key={m.id}>
               <Td className="whitespace-nowrap text-[13px] text-muted">{dateTime(m.createdAt)}</Td>
               <Td className="whitespace-nowrap"><span className="ltr font-mono text-[13px]">{displayTo(m.to)}</span></Td>
-              <Td className="whitespace-nowrap">{t(KIND[m.kind] ?? m.kind)}</Td>
+              <Td className="whitespace-nowrap">{t(KIND[m.kind] ?? m.kind)}{m.channel === "whatsapp" && <span className="ms-1.5 rounded bg-ok-soft px-1.5 py-0.5 text-[11px] font-medium text-ok">WhatsApp</span>}</Td>
               <Td>{m.parcelId ? <Link href={`/admin/parcels/${m.parcelId}`} className="font-mono text-[13px] hover:underline">{m.tracking}</Link> : "—"}</Td>
               <Td className="min-w-72 text-[13px] text-ink-2">
                 <p dir="auto" className="line-clamp-2">{m.kind === "password_reset" ? t("(contains a sign-in link, hidden)") : m.body}</p>

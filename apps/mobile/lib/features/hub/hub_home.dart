@@ -23,7 +23,12 @@ Future<ScanResult> hubScan(Api api, String code, String direction) async {
       return ScanResult(code, tr('Bag received: {n} parcels', {'n': b.parcels}));
     }
     final p = Parcel.fromJson(r['parcel'] as Map<String, dynamic>);
-    return ScanResult(code, tr(statusLabels[p.status] ?? p.status));
+    final lane = r['lane'] is Map ? r['lane'] as Map : null;
+    return ScanResult(
+      code,
+      lane == null ? tr(statusLabels[p.status] ?? p.status) : '${tr(statusLabels[p.status] ?? p.status)} · ${tr(lane['name'] as String? ?? '')}',
+      lane: lane?['code'] as String?,
+    );
   } on ApiException catch (e) {
     return ScanResult(code, e.message, ok: false);
   }

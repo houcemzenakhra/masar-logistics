@@ -6,9 +6,10 @@ import type { Status } from "./domain/state";
 import { communes, hubs, merchants, pickupRequests, rateTiers, users, wilayas } from "./schema";
 import { algeriaDay } from "./services/pickups";
 import { courierCash, handover, merchantOwed, payout } from "./services/ledger";
-import { createParcel, transition, type Actor, type NewParcel } from "./services/parcels";
+import { createParcel, transition, type Actor, type FailReason, type NewParcel } from "./services/parcels";
 import { createDesk } from "./services/desks";
 import { setConfirmOrders } from "./services/returns";
+import { suggestZones } from "./services/sorting";
 import { optimiseCourierRoute } from "./services/routes";
 
 /** Password of the demo accounts on a local database. Deployed demos set MASAR_DEMO_PASSWORD instead. */
@@ -192,7 +193,7 @@ async function seedDemo(db: DB, hubId: Record<string, string>, password: string)
       A,
       new Date(t),
     );
-    const go = (to: Status, actor: Actor, extra: { courierId?: string; note?: string } = {}) =>
+    const go = (to: Status, actor: Actor, extra: { courierId?: string; note?: string; reason?: FailReason } = {}) =>
       transition(db, { parcelId: p.id, to, actor, at: step(), ...extra });
     const sameHub = p.originHubId === p.destHubId;
     // Picked up by an Algiers courier, delivered by the courier of the destination hub.
@@ -211,10 +212,10 @@ async function seedDemo(db: DB, hubId: Record<string, string>, password: string)
     if (upTo < path.length) continue;
 
     if (stage === "delivered") await go("delivered", courier(did));
-    if (stage === "attempt_failed") await go("attempt_failed", courier(did), { note: "Recipient not answering" });
+    if (stage === "attempt_failed") await go("attempt_failed", courier(did), { reason: (["no_answer", "absent", "wrong_address", "unreachable"] as const)[i % 4] });
     if (stage === "returned") {
-      await go("attempt_failed", courier(did), { note: "Refused: changed their mind" });
-      await go("return_initiated", A);
+      // A refusal sends the parcel back on its own.
+      await go("attempt_failed", courier(did), { reason: "refused", note: "Changed their mind" });
       await go("returned", H);
     }
   }
@@ -242,6 +243,8 @@ async function seedDemo(db: DB, hubId: Record<string, string>, password: string)
   const part = await extra({ merchantId: m1.id, allowPartial: true, description: "3 articles: robe, foulard, sac" }, 4);
   await run(part.id, ["pickup_assigned", "picked_up", "at_origin_hub", "out_for_delivery"], c2.id);
   await setConfirmOrders(db, m2.id, true);
+  // Sorting lanes at the Algiers hub.
+  await suggestZones(db, hubId.ALG);
   // TechZone booked a pickup for today.
   await db.insert(pickupRequests).values({ merchantId: m2.id, day: algeriaDay(), window: "afternoon", expected: 6, note: "Cartons au rez-de-chaussée", createdBy: m2User.id });
   await extra({ merchantId: m2.id, description: "Casque Bluetooth" }, 5);

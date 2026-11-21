@@ -28,6 +28,7 @@ export default async function NewOrder() {
           <DestinationFields wilayas={wilayas} deskDiscount={desk.discount} />
           <Field label={t("Cash to collect (DZD)")} hint={t("Enter 0 if the order is already paid.")}><Input name="codAmount" required inputMode="numeric" defaultValue={0} dir="ltr" className="tnum" /></Field>
           <Field label={t("Weight (kg)")}><Input name="weightKg" required type="number" min={0.1} max={70} step={0.1} defaultValue={1} dir="ltr" className="tnum" /></Field>
+          <Field label={t("Size in cm (optional)")} hint={t("Length × width × height. Large light parcels are charged by volume.")}><Input name="size" placeholder="30x20x10" dir="ltr" className="tnum" /></Field>
           <Field label={t("Contents (optional)")}><Input name="description" maxLength={120} /></Field>
           <Field label={t("Text messages to the recipient in")} hint={t("Arabic messages cost about twice as much.")}>
             <Select name="recipientLang" defaultValue="fr">

@@ -163,6 +163,8 @@ export const bags = pgTable(
     createdAt: createdAt(),
     sealedAt: timestamp("sealed_at", { withTimezone: true }),
     receivedAt: timestamp("received_at", { withTimezone: true }),
+    /** When the receiving hub finished checking the bag's contents parcel by parcel. */
+    checkedAt: timestamp("checked_at", { withTimezone: true }),
   },
   (t) => [index("bags_manifest_idx").on(t.manifestId), index("bags_status_idx").on(t.status)],
 );
@@ -273,6 +275,12 @@ export const parcels = pgTable(
     parentId: text("parent_id"),
     /** The merchant's own order number (shop, spreadsheet or API). Unique per merchant. */
     externalRef: text("external_ref"),
+    /** Outer size in cm, when given. Large light parcels are charged by volume. */
+    lengthCm: integer("length_cm"),
+    widthCm: integer("width_cm"),
+    heightCm: integer("height_cm"),
+    /** Expected arrival at the door, from the courier's planned route. */
+    eta: timestamp("eta", { withTimezone: true }),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -342,6 +350,8 @@ export const smsMessages = pgTable(
     to: text("to").notNull(),
     body: text("body").notNull(),
     kind: text("kind").notNull(),
+    /** `whatsapp` messages fall back to a text message when WhatsApp cannot deliver them. */
+    channel: text("channel", { enum: ["sms", "whatsapp"] }).notNull().default("sms"),
     parcelId: text("parcel_id").references(() => parcels.id),
     userId: text("user_id").references(() => users.id),
     /** Stops the same message being queued twice for one event, e.g. one per delivery attempt. */
@@ -638,4 +648,42 @@ export const pickupRequests = pgTable(
     createdAt: createdAt(),
   },
   (t) => [index("pickup_requests_day_idx").on(t.day), uniqueIndex("pickup_requests_merchant_day_idx").on(t.merchantId, t.day)],
+);
+
+// ---------- operations: sorting, bag checks ----------
+
+/** A lane on a hub's floor. Parcels go to the lane of their destination hub or local commune. */
+export const sortZones = pgTable(
+  "sort_zones",
+  {
+    id: id(),
+    hubId: text("hub_id").notNull().references(() => hubs.id),
+    /** Painted on the floor, e.g. "A1". */
+    code: text("code").notNull(),
+    name: text("name").notNull(),
+    /** Local deliveries to these communes. */
+    communeIds: jsonb("commune_ids").$type<number[]>().notNull().default([]),
+    /** Parcels leaving for these hubs. */
+    destHubIds: jsonb("dest_hub_ids").$type<string[]>().notNull().default([]),
+    /** Stop desk parcels of this hub. */
+    desk: boolean("desk").notNull().default(false),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("sort_zones_hub_code_idx").on(t.hubId, t.code)],
+);
+
+/** Each parcel scanned while checking a received bag, including ones that should not be there. */
+export const bagChecks = pgTable(
+  "bag_checks",
+  {
+    id: id(),
+    bagId: text("bag_id").notNull().references(() => bags.id),
+    parcelId: text("parcel_id").references(() => parcels.id),
+    tracking: text("tracking").notNull(),
+    /** `extra`: the parcel was found in this bag but belongs elsewhere (or is unknown). */
+    result: text("result", { enum: ["ok", "extra"] }).notNull(),
+    actorId: text("actor_id").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [uniqueIndex("bag_checks_bag_tracking_idx").on(t.bagId, t.tracking)],
 );

@@ -1,6 +1,6 @@
 import { MessageSquareQuote, Printer, Star } from "lucide-react";
 import Link from "next/link";
-import { confirmOrderAction, deliverAction, transitionAction } from "@/app/actions";
+import { confirmOrderAction, deliverAction, measureAction, transitionAction } from "@/app/actions";
 import { dateTime } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
 import type { Session } from "@/server/auth";
@@ -306,6 +306,7 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms, door, return
             {bag && session.role !== "merchant" && (
               <Row k="Bag"><Link href={`/admin/linehaul/bags/${bag.id}`} className="font-mono text-accent-deep hover:underline">{bag.code}</Link></Row>
             )}
+            {p.lengthCm && <Row k="Size"><span className="tnum">{p.lengthCm} × {p.widthCm} × {p.heightCm} cm</span></Row>}
             <Row k="Delivery">{p.deliveryType === "desk" ? t("Stop desk: {name}", { name: p.desk ?? "" }) : t("To the door")}</Row>
             {p.allowPartial && <Row k="Partial delivery">{t("Allowed")}</Row>}
             {p.exchange && <Row k="Exchange"><span dir="auto">{p.exchangeNote}</span></Row>}
@@ -321,6 +322,20 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms, door, return
           </dl>
         </Card>
         {returns?.history && <History h={returns.history} />}
+        {(session.role === "admin" || (session.role === "hub" && p.currentHubId === session.hubId)) && p.kind === "delivery" && !["delivered", "returned", "cancelled", "lost"].includes(p.status) && (
+          <Card className="p-5">
+            <h2 className="text-[15px] font-semibold">{t("Weigh and measure")}</h2>
+            <p className="mt-1 text-xs text-muted">{t("If the parcel is heavier or bigger than ordered, the fee is recalculated.")}</p>
+            <ActionForm action={measureAction} className="mt-3 grid grid-cols-2 gap-3">
+              <input type="hidden" name="parcelId" value={p.id} />
+              <div className="col-span-2"><Field label={t("Weight (kg)")}><Input name="weightKg" inputMode="decimal" required defaultValue={p.weightKg} dir="ltr" className="tnum" /></Field></div>
+              <Field label={t("Length (cm)")}><Input name="lengthCm" inputMode="numeric" defaultValue={p.lengthCm ?? ""} dir="ltr" className="tnum" /></Field>
+              <Field label={t("Width (cm)")}><Input name="widthCm" inputMode="numeric" defaultValue={p.widthCm ?? ""} dir="ltr" className="tnum" /></Field>
+              <Field label={t("Height (cm)")}><Input name="heightCm" inputMode="numeric" defaultValue={p.heightCm ?? ""} dir="ltr" className="tnum" /></Field>
+              <div className="col-span-2"><Submit variant="dark">{t("Save")}</Submit></div>
+            </ActionForm>
+          </Card>
+        )}
       </div>
     </div>
   );

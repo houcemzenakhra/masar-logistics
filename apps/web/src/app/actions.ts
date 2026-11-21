@@ -18,13 +18,13 @@ import { maskPhone, normalizeMobile } from "@/server/phone";
 import { rateTiers, users } from "@/server/schema";
 import { assign, autoAssign, createStaff, setUserActive } from "@/server/services/dispatch";
 import { handover, payout } from "@/server/services/ledger";
-import { addBagsToManifest, addToBag, createBag, createManifest, departManifest, receiveBag, removeBagFromManifest, removeFromBag, sealBag } from "@/server/services/linehaul";
+import { checkBagParcel, finishBagCheck, addBagsToManifest, addToBag, createBag, createManifest, departManifest, receiveBag, removeBagFromManifest, removeFromBag, sealBag } from "@/server/services/linehaul";
 import { ImportHeaderError, commitBatch, discardBatch, stageImport } from "@/server/services/imports";
 import { sendMail } from "@/server/services/mail";
 import { CLAIM_KINDS, decideClaim, fileClaim } from "@/server/services/claims";
 import { deliver, setDeliverySettings } from "@/server/services/delivery";
 import { cancelPayout, createBatch, markBatchPaid, receiveCash, recordPay, removeFromBatch, requestPayout, resolveShortfall, setCompany, setPayRates, setPayoutDetails } from "@/server/services/money";
-import { DomainError, FAIL_REASONS, createParcel, getParcel, hubScanTarget, transition, type FailReason } from "@/server/services/parcels";
+import { DomainError, FAIL_REASONS, createParcel, getParcel, hubScanTarget, measureParcel, setPricingSettings, transition, type FailReason } from "@/server/services/parcels";
 import { rate, reschedule, setInstructions, verifyRecipient } from "@/server/services/recipient";
 import { optimiseCourierRoute } from "@/server/services/routes";
 import { LIMITS, audit, checkLimit, clearLimit, createResetToken, rateLimit, resetPassword } from "@/server/services/security";
@@ -32,6 +32,8 @@ import { registerMerchant, setMerchantStatus } from "@/server/services/signup";
 import { IntegrationError, createApiKey, createEndpoint, removeEndpoint, revokeApiKey, sendTestEvent } from "@/server/services/integrations";
 import { PickupError, bookPickup, cancelPickup, setPickupDays } from "@/server/services/pickups";
 import { dayName } from "@/lib/format";
+import { parseSize } from "@/server/domain/pricing";
+import { SortingError, createZone, deleteZone, suggestZones, zoneFor } from "@/server/services/sorting";
 import { DeskError, createDesk, setDeskActive, setDeskSettings } from "@/server/services/desks";
 import { answerConfirmation, setConfirmOrders, setHistorySettings } from "@/server/services/returns";
 import { PARCEL_KINDS, dispatch, queueSms, renderResetSms, setSmsSettings } from "@/server/services/sms";
@@ -43,7 +45,7 @@ async function guard(fn: (t: Awaited<ReturnType<typeof getT>>) => Promise<FormSt
     return (await fn(t)) ?? {};
   } catch (e) {
     if (e instanceof z.ZodError) return { error: t(e.issues[0].message) };
-    if (e instanceof DomainError || e instanceof DeskError || e instanceof IntegrationError || e instanceof PickupError) return { error: t(e.message) };
+    if (e instanceof DomainError || e instanceof DeskError || e instanceof IntegrationError || e instanceof PickupError || e instanceof SortingError) return { error: t(e.message) };
     if (e instanceof Error && /only holds|is owed|available to pay|positive whole/.test(e.message)) return { error: t(e.message) };
     throw e;
   }
@@ -229,6 +231,8 @@ const ParcelCommon = {
   allowPartial: z.preprocess((v) => v === "on" || v === true, z.boolean()),
   exchange: z.preprocess((v) => v === "on" || v === true, z.boolean()),
   exchangeNote: z.string().trim().max(200).optional(),
+  /** "30x20x10" from the order form; empty when not given. */
+  size: z.string().trim().max(40).optional(),
 };
 const NewParcel = z.discriminatedUnion("deliveryType", [
   z.object({
@@ -252,7 +256,10 @@ export async function createParcelAction(_: FormState, fd: FormData): Promise<Fo
     const input = NewParcel.parse({ deliveryType: "home", ...Object.fromEntries(fd) });
     const merchantId = s.role === "merchant" ? s.merchantId! : str(fd, "merchantId");
     if (!merchantId) throw new DomainError("Choose a merchant");
-    const p = await createParcel(await getDb(), { ...input, recipientPhone: normalizeMobile(input.recipientPhone) ?? input.recipientPhone, weightKg: Math.ceil(input.weightKg), merchantId }, s);
+    const { size: sizeText, ...order } = input;
+    const size = sizeText ? parseSize(sizeText) : null;
+    if (sizeText && !size) throw new DomainError("Write the size like 30x20x10 (cm), or leave it empty");
+    const p = await createParcel(await getDb(), { ...order, ...(size ?? {}), recipientPhone: normalizeMobile(order.recipientPhone) ?? order.recipientPhone, weightKg: Math.ceil(order.weightKg), merchantId }, s);
     id = p.id;
   });
   if (res?.error) return res;
@@ -310,7 +317,7 @@ export async function optimiseRouteAction(_: FormState, fd: FormData): Promise<F
     const r = await optimiseCourierRoute(await getDb(), s.role === "courier" ? s.userId : str(fd, "courierId"));
     refresh();
     if (r.stops === 0) return { error: t("There is nothing to route yet.") };
-    return { ok: t("Route planned. Stops: {s}, about {k} km in a straight line.", { s: r.stops, k: r.km }) };
+    return { ok: t("Route planned. Stops: {s}, about {k} km and {m} min.", { s: r.stops, k: r.km, m: r.minutes }) };
   });
 }
 
@@ -334,7 +341,9 @@ export async function hubScanAction(_: FormState, fd: FormData): Promise<FormSta
     if (!to) throw new DomainError("This parcel cannot be scanned here in its current status.");
     await transition(db, { parcelId: p.id, to, actor: s });
     refresh();
-    return { ok: `${p.tracking} → ${t(STATUS_TEXT[to] ?? to)}` };
+    const hubId = to === "at_origin_hub" ? p.originHubId : to === "at_destination_hub" ? p.destHubId : null;
+    const lane = hubId ? await zoneFor(db, hubId, p) : null;
+    return { ok: `${p.tracking} → ${t(STATUS_TEXT[to] ?? to)}${lane ? ` · ${t("Lane {code}: {name}", { code: lane.code, name: lane.name })}` : ""}`, big: lane?.code };
   });
 }
 
@@ -361,6 +370,16 @@ export async function bagAction(_: FormState, fd: FormData): Promise<FormState> 
       const r = await receiveBag(db, { id: bagId }, s);
       refresh();
       return { ok: t("Bag {code} received. Parcels now at this hub: {n}.", { code: r.code, n: r.parcels }) };
+    } else if (op === "check") {
+      const r = await checkBagParcel(db, { bagId, tracking: str(fd, "tracking") }, s);
+      refresh();
+      if (r.again) return { ok: t("Already checked.") };
+      if (r.result === "extra") return { error: r.known ? t("Not in this bag: put it aside and tell operations.") : t("Unknown tracking number: put it aside and tell operations.") };
+      return { ok: t("In the bag.") };
+    } else if (op === "finish") {
+      const r = await finishBagCheck(db, bagId, s);
+      refresh();
+      return r.missing.length || r.extra.length ? { error: t("Checked: {m} missing, {e} that should not be there. Operations have been told.", { m: r.missing.length, e: r.extra.length }) } : { ok: t("Checked: everything is there.") };
     }
     refresh();
   });
@@ -485,8 +504,9 @@ export async function smsSettingsAction(_: FormState, fd: FormData): Promise<For
   const s = await requireRole("admin");
   return guard(async (t) => {
     const enabled = Object.fromEntries(PARCEL_KINDS.map((k) => [k, fd.get(k) === "on"])) as Record<(typeof PARCEL_KINDS)[number], boolean>;
-    await setSmsSettings(await getDb(), { enabled });
-    await log(s, "sms.settings", "settings", "sms", { enabled });
+    const channel = fd.get("channel") === "whatsapp" ? "whatsapp" : "sms";
+    await setSmsSettings(await getDb(), { enabled, channel });
+    await log(s, "sms.settings", "settings", "sms", { enabled, channel });
     refresh();
     return { ok: t("Saved.") };
   });
@@ -913,5 +933,66 @@ export async function cancelPickupAction(_: FormState, fd: FormData): Promise<Fo
   return guard(async () => {
     await cancelPickup(await getDb(), s.merchantId!, str(fd, "id"));
     refresh();
+  });
+}
+
+// ---------- operations: sorting lanes, measuring, bag checks, pricing ----------
+
+const hubOf = (s: Session, fd: FormData) => (s.role === "hub" ? s.hubId! : str(fd, "hubId"));
+
+export async function createZoneAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin", "hub");
+  return guard(async (t) => {
+    const z = await createZone(await getDb(), {
+      hubId: hubOf(s, fd),
+      code: str(fd, "code"),
+      name: str(fd, "name"),
+      communeIds: fd.getAll("communeIds").map(Number).filter(Boolean),
+      destHubIds: fd.getAll("destHubIds").map(String).filter(Boolean),
+      desk: fd.get("desk") === "on",
+    });
+    await log(s, "sorting.create", "sort_zone", z.id, { code: z.code });
+    refresh();
+    return { ok: t("Lane {code} added.", { code: z.code }) };
+  });
+}
+
+export async function deleteZoneAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin", "hub");
+  return guard(async () => {
+    const z = await deleteZone(await getDb(), hubOf(s, fd), str(fd, "id"));
+    await log(s, "sorting.delete", "sort_zone", z.id, { code: z.code });
+    refresh();
+  });
+}
+
+export async function suggestZonesAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin", "hub");
+  return guard(async (t) => {
+    const made = await suggestZones(await getDb(), hubOf(s, fd));
+    await log(s, "sorting.suggest", "hub", hubOf(s, fd), { lanes: made.length });
+    refresh();
+    return { ok: t("{n} lanes set up. Adjust them as your floor needs.", { n: made.length }) };
+  });
+}
+
+export async function measureAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin", "hub");
+  return guard(async (t) => {
+    const n = (k: string) => (str(fd, k) ? Number(str(fd, k).replace(",", ".")) : null);
+    const r = await measureParcel(await getDb(), { parcelId: str(fd, "parcelId"), weightKg: n("weightKg") ?? 0, lengthCm: n("lengthCm"), widthCm: n("widthCm"), heightCm: n("heightCm") }, s);
+    refresh();
+    return { ok: r.before === r.after ? t("Saved. The fee stays {x} DZD.", { x: r.after }) : t("Saved. Fee {a} → {b} DZD (charged as {kg} kg).", { a: r.before, b: r.after, kg: r.chargeableKg }) };
+  });
+}
+
+export async function pricingSettingsAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const divisor = Number(str(fd, "divisor"));
+    await setPricingSettings(await getDb(), { divisor });
+    await log(s, "settings.pricing", "settings", "pricing", { divisor });
+    refresh();
+    return { ok: t("Saved.") };
   });
 }

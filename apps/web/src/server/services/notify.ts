@@ -35,6 +35,11 @@ const TEXTS = {
     fr: ["Livré", "{tracking} pour {name} a été livré. {amount} DA ajoutés à votre solde."],
     ar: ["تم التسليم", "تم تسليم {tracking} إلى {name}. أضيف {amount} دج إلى رصيدك."],
   },
+  shortage: {
+    en: ["Bag check: something is off", "Bag {code}: {missing} missing, {extra} found that belong elsewhere."],
+    fr: ["Contrôle de sac : écart", "Sac {code} : {missing} manquant(s), {extra} trouvé(s) qui n'y étaient pas."],
+    ar: ["فحص الكيس: يوجد فرق", "الكيس {code}: {missing} مفقود، و{extra} وُجد وهو ليس منه."],
+  },
   confirmed: {
     en: ["Order confirmed", "{name} confirmed {tracking}. It can now be picked up."],
     fr: ["Commande confirmée", "{name} a confirmé {tracking}. Le colis peut être ramassé."],
