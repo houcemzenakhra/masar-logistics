@@ -4,7 +4,7 @@ import { AnimatePresence, motion, useInView } from "motion/react";
 import { useReduced } from "./use-reduced";
 import { Check, CircleAlert, Wand2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { PARCEL_KINDS, renderParcelSms, segments, type Lang, type ParcelKind } from "@/server/domain/sms-text";
+import { MAIN_KINDS, renderParcelSms, segments, type Lang } from "@/server/domain/sms-text";
 import { useLocale, useT } from "../i18n-client";
 
 /** Spreadsheet import: rows are checked one by one, the way the real import reports them. */
@@ -74,16 +74,16 @@ export function SmsDemo() {
   const t = useT();
   const ui = useLocale();
   const [lang, setLang] = useState<Lang>(ui === "ar" ? "ar" : "fr");
-  const [kind, setKind] = useState<ParcelKind>("out_for_delivery");
+  const [kind, setKind] = useState<(typeof MAIN_KINDS)[number]>("out_for_delivery");
   const reduce = useReduced();
   const text = renderParcelSms(kind, lang, { tracking: "MSR004512907", merchant: "Dar El Moda", merchantPhone: "0550 12 34 56", cod: 4500, courier: "Karim", courierPhone: "0770 11 22 33" }, "masar.dz");
   const seg = segments(text);
-  const KIND: Record<ParcelKind, string> = { out_for_delivery: t("Out for delivery"), attempt_failed: t("Attempt failed"), delivered: t("Delivered") };
+  const KIND: Record<(typeof MAIN_KINDS)[number], string> = { out_for_delivery: t("Out for delivery"), attempt_failed: t("Attempt failed"), delivered: t("Delivered") };
   const pill = (on: boolean) => `rounded-full px-3 py-1 text-[13px] font-medium transition-colors ${on ? "bg-navy text-white" : "bg-white text-ink-2 ring-1 ring-line hover:text-ink"}`;
   return (
     <div>
       <div className="flex flex-wrap gap-1.5" role="group" aria-label={t("Message")}>
-        {PARCEL_KINDS.map((k) => (
+        {MAIN_KINDS.map((k) => (
           <button key={k} type="button" aria-pressed={kind === k} onClick={() => setKind(k)} className={pill(kind === k)}>{KIND[k]}</button>
         ))}
       </div>

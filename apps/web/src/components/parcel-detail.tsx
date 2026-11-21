@@ -1,6 +1,6 @@
 import { MessageSquareQuote, Printer, Star } from "lucide-react";
 import Link from "next/link";
-import { transitionAction } from "@/app/actions";
+import { confirmOrderAction, deliverAction, transitionAction } from "@/app/actions";
 import { dateTime } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
 import type { Session } from "@/server/auth";
@@ -10,9 +10,10 @@ import type { listProofs } from "@/server/services/delivery";
 import { FAIL_REASONS, REASON_TEXT } from "@/server/services/notify";
 import type { getParcel } from "@/server/services/parcels";
 import type { listRequests } from "@/server/services/recipient";
+import type { RecipientHistory, linkedParcels } from "@/server/services/returns";
 import { ActionForm, Submit } from "./forms";
 import { ProgressRail, Timeline } from "./tracking";
-import { Badge, Card, CardHeader, LinkButton, Money, Select, StatusBadge } from "./ui";
+import { Badge, Card, CardHeader, Field, Input, LinkButton, Money, Select, StatusBadge } from "./ui";
 
 type Parcel = NonNullable<Awaited<ReturnType<typeof getParcel>>>;
 export type DoorInfo = {
@@ -20,6 +21,7 @@ export type DoorInfo = {
   requests: Awaited<ReturnType<typeof listRequests>>;
   claims: Awaited<ReturnType<typeof listClaims>>;
 };
+export type ReturnsInfo = { history: RecipientHistory | null } & Awaited<ReturnType<typeof linkedParcels>>;
 
 const PROOF_LABEL = { code: "Recipient's code", photo: "Photo", signature: "Signature" } as const;
 const CLAIM_STATUS = { open: ["Under review", "warn"], approved: ["Approved", "success"], rejected: ["Declined", "danger"] } as const;
@@ -93,6 +95,7 @@ const VERB: Partial<Record<Status, string>> = {
   in_transit: "Dispatch to destination hub",
   at_destination_hub: "Receive at destination hub",
   out_for_delivery: "Send out for delivery",
+  ready_for_pickup: "Put on the desk shelf",
   delivered: "Mark delivered",
   attempt_failed: "Record failed attempt",
   return_initiated: "Start return",
@@ -100,6 +103,7 @@ const VERB: Partial<Record<Status, string>> = {
   cancelled: "Cancel order",
   lost: "Mark lost",
 };
+const CONFIRMATION = { none: "Not needed", pending: "Waiting for the recipient", confirmed: "Confirmed", declined: "Declined" } as const;
 const DANGER: Status[] = ["cancelled", "lost", "attempt_failed", "return_initiated"];
 
 function whereNow(p: Parcel) {
@@ -119,12 +123,81 @@ const Row = ({ k, children }: { k: string; children: React.ReactNode }) => (
 );
 
 type Sms = { id: string; kind: string; status: string; createdAt: Date; body: string };
-const SMS_KIND: Record<string, string> = { out_for_delivery: "Out for delivery", attempt_failed: "Delivery failed", delivered: "Delivered" };
+const SMS_KIND: Record<string, string> = { confirm_order: "Order confirmation", ready_at_desk: "Ready at stop desk", out_for_delivery: "Out for delivery", attempt_failed: "Delivery failed", delivered: "Delivered" };
 const SMS_STATUS: Record<string, [string, "success" | "danger" | "warn" | "neutral"]> = { sent: ["Sent", "success"], failed: ["Failed", "danger"], simulated: ["Test mode", "warn"], queued: ["Queued", "neutral"], sending: ["Sending", "neutral"] };
 
-export function ParcelDetail({ p, session, couriers = [], bag, sms, door }: { p: Parcel; session: Session; couriers?: { id: string; name: string }[]; bag?: { id: string; code: string } | null; sms?: Sms[]; door?: DoorInfo }) {
+/** Waiting for the recipient's yes: the merchant or operations can answer for them after a call. */
+function Confirmation({ p }: { p: Parcel }) {
+  return (
+    <Card className="border-warn/40 bg-warn-soft/40">
+      <CardHeader title={t("Waiting for the recipient to confirm")} hint={t("They got a text message with a link. It is picked up once they confirm. If you called them, answer for them here.")} />
+      <div className="flex flex-wrap gap-3 p-5">
+        <ActionForm action={confirmOrderAction}>
+          <input type="hidden" name="parcelId" value={p.id} />
+          <input type="hidden" name="answer" value="yes" />
+          <Submit>{t("Confirmed by phone")}</Submit>
+        </ActionForm>
+        <ActionForm action={confirmOrderAction}>
+          <input type="hidden" name="parcelId" value={p.id} />
+          <input type="hidden" name="answer" value="no" />
+          <Submit variant="danger">{t("Recipient declined: cancel")}</Submit>
+        </ActionForm>
+      </div>
+    </Card>
+  );
+}
+
+/** Handing the parcel over: at the door (admin), or at the stop desk against the recipient's code. */
+function HandOver({ p, session }: { p: Parcel; session: Session }) {
+  const desk = p.status === "ready_for_pickup";
+  return (
+    <ActionForm action={deliverAction} className="grid w-full gap-3 sm:grid-cols-2">
+      <input type="hidden" name="parcelId" value={p.id} />
+      <Field label={t("Code from the recipient's text message")} hint={desk || session.role !== "admin" ? undefined : t("Optional for operations.")}>
+        <Input name="code" inputMode="numeric" maxLength={4} required={desk && session.role !== "admin"} dir="ltr" className="tnum" />
+      </Field>
+      <Field label={t("Collected by (optional)")}><Input name="receivedBy" maxLength={80} /></Field>
+      {p.allowPartial && p.codAmount > 0 && (
+        <details className="rounded-xl bg-paper p-4 ring-1 ring-inset ring-line sm:col-span-2">
+          <summary className="cursor-pointer text-sm font-medium">{t("The recipient keeps only part of the order")}</summary>
+          <label className="mt-3 flex items-center gap-2 text-sm">
+            <input type="checkbox" name="partial" className="size-4 accent-[#ff5b24]" /> {t("Partial delivery")}
+          </label>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <Field label={t("Cash collected (DZD)")}><Input name="collected" inputMode="numeric" dir="ltr" className="tnum" /></Field>
+            <Field label={t("What comes back")}><Input name="returnedItems" maxLength={200} /></Field>
+          </div>
+        </details>
+      )}
+      {p.exchange && <p className="rounded-xl bg-info-soft px-3 py-2 text-sm text-info sm:col-span-2">{t("Exchange: take back {item}.", { item: p.exchangeNote })}</p>}
+      <div className="sm:col-span-2"><Submit>{desk ? t("Hand over") : t("Mark delivered")}</Submit></div>
+    </ActionForm>
+  );
+}
+
+/** How this phone number's past orders went, as counts. */
+function History({ h }: { h: RecipientHistory }) {
+  const risky = h.refused > 0 && h.refused * 2 >= h.orders;
+  return (
+    <Card className="p-5">
+      <h2 className="text-[15px] font-semibold">{t("This recipient's past orders")}</h2>
+      <p className="mt-1 text-xs text-muted">{t("Across Masar, last 12 months. Counts only: no names or shops are shared.")}</p>
+      <dl className="mt-2 divide-y divide-line">
+        <Row k="Delivered"><span className="tnum">{h.delivered} / {h.orders}</span></Row>
+        <Row k="Refused at the door"><span className={`tnum ${h.refused ? "text-danger" : ""}`}>{h.refused}</span></Row>
+        <Row k="Returned"><span className="tnum">{h.returned}</span></Row>
+      </dl>
+      {risky && <p className="mt-3 rounded-xl bg-danger-soft px-3 py-2 text-sm text-danger">{t("Often refuses parcels. Consider calling before shipping.")}</p>}
+    </Card>
+  );
+}
+
+export function ParcelDetail({ p, session, couriers = [], bag, sms, door, returns }: { p: Parcel; session: Session; couriers?: { id: string; name: string }[]; bag?: { id: string; code: string } | null; sms?: Sms[]; door?: DoorInfo; returns?: ReturnsInfo }) {
+  // Delivery goes through the hand-over form (code, partial delivery); the rest are one-click moves.
   const next = nextStatuses(p.status as Status, session.role);
-  const net = p.codAmount - p.deliveryFee;
+  const handOver = next.includes("delivered") && (session.role === "admin" || session.role === "hub");
+  const moves = next.filter((to) => to !== "delivered" || !handOver);
+  const net = (p.collectedAmount ?? p.codAmount) - p.deliveryFee;
   return (
     <div className="grid gap-5 lg:grid-cols-[1fr_340px]">
       <div className="min-w-0 space-y-5">
@@ -142,11 +215,14 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms, door }: { p:
           <div className="mt-7"><ProgressRail status={p.status} /></div>
         </Card>
 
+        {p.confirmation === "pending" && p.status === "created" && (session.role === "merchant" || session.role === "admin") && <Confirmation p={p} />}
+
         {next.length > 0 && (
           <Card>
             <CardHeader title={t("Next step")} hint={t("Only the moves allowed from the current status are shown.")} />
+            {handOver && <div className="border-b border-line p-5"><HandOver p={p} session={session} /></div>}
             <div className="flex flex-wrap gap-3 p-5">
-              {next.map((to) => {
+              {moves.map((to) => {
                 const needsCourier = to === "pickup_assigned" || to === "out_for_delivery";
                 return (
                   <ActionForm key={to} action={transitionAction} className="flex flex-wrap items-center gap-2">
@@ -205,6 +281,7 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms, door }: { p:
             <Row k="Wilaya">{place(p.destWilaya, p.destWilayaAr)}</Row>
             <Row k="Commune">{place(p.commune, p.communeAr)}</Row>
             <Row k="Address">{p.address}</Row>
+            {p.deliveryType === "desk" && p.deskHours && <Row k="Desk hours">{p.deskHours}</Row>}
             <Row k="Text messages in">{p.recipientLang === "ar" ? "العربية" : "Français"}</Row>
           </dl>
         </Card>
@@ -212,6 +289,7 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms, door }: { p:
           <h2 className="text-[15px] font-semibold">{t("Money")}</h2>
           <dl className="mt-2 divide-y divide-line">
             <Row k="Cash to collect"><Money value={p.codAmount} /></Row>
+            {p.collectedAmount != null && <Row k="Collected (partial)"><Money value={p.collectedAmount} /></Row>}
             <Row k="Delivery fee"><Money value={p.deliveryFee} /></Row>
             <Row k={net >= 0 ? "Merchant receives" : "Merchant pays"}><Money value={Math.abs(net)} className="text-ok" /></Row>
             <Row k="Fee if returned"><Money value={p.returnFee} /></Row>
@@ -228,10 +306,21 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms, door }: { p:
             {bag && session.role !== "merchant" && (
               <Row k="Bag"><Link href={`/admin/linehaul/bags/${bag.id}`} className="font-mono text-accent-deep hover:underline">{bag.code}</Link></Row>
             )}
+            <Row k="Delivery">{p.deliveryType === "desk" ? t("Stop desk: {name}", { name: p.desk ?? "" }) : t("To the door")}</Row>
+            {p.allowPartial && <Row k="Partial delivery">{t("Allowed")}</Row>}
+            {p.exchange && <Row k="Exchange"><span dir="auto">{p.exchangeNote}</span></Row>}
+            {p.confirmation !== "none" && <Row k="Confirmation">{t(CONFIRMATION[p.confirmation])}</Row>}
+            {returns?.parent && (
+              <Row k="Return of"><Link href={`/${session.role === "merchant" ? "merchant" : "admin"}/parcels/${returns.parent.id}`} className="font-mono text-accent-deep hover:underline">{returns.parent.tracking}</Link></Row>
+            )}
+            {returns?.legs.map((l) => (
+              <Row key={l.id} k="Coming back as"><Link href={`/${session.role === "merchant" ? "merchant" : "admin"}/parcels/${l.id}`} className="font-mono text-accent-deep hover:underline">{l.tracking}</Link></Row>
+            ))}
             <Row k="Delivery attempts">{p.attempts}</Row>
             <Row k="Created">{dateTime(p.createdAt)}</Row>
           </dl>
         </Card>
+        {returns?.history && <History h={returns.history} />}
       </div>
     </div>
   );

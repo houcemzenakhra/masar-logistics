@@ -5,7 +5,9 @@ import type { DB } from "./db";
 import type { Status } from "./domain/state";
 import { communes, hubs, merchants, rateTiers, users, wilayas } from "./schema";
 import { courierCash, handover, merchantOwed, payout } from "./services/ledger";
-import { createParcel, transition, type Actor } from "./services/parcels";
+import { createParcel, transition, type Actor, type NewParcel } from "./services/parcels";
+import { createDesk } from "./services/desks";
+import { setConfirmOrders } from "./services/returns";
 import { optimiseCourierRoute } from "./services/routes";
 
 /** Password of the demo accounts on a local database. Deployed demos set MASAR_DEMO_PASSWORD instead. */
@@ -215,6 +217,31 @@ async function seedDemo(db: DB, hubId: Record<string, string>, password: string)
       await go("returned", H);
     }
   }
+
+  // Stop desks with a parcel on the shelf and one just arrived; TechZone asks recipients to
+  // confirm orders (one is waiting); an exchange and an order open to partial delivery are out.
+  const desks = [];
+  for (const d of [
+    { name: "Masar Bab Ezzouar", wilayaId: 16, address: "Centre commercial Bab Ezzouar, niveau 0", hours: "Sam-Jeu 9:00-19:00", phone: "0550 40 50 60" },
+    { name: "Masar Oran Centre", wilayaId: 31, address: "Boulevard de la Soummam, Oran", hours: "Sam-Jeu 9:00-18:00" },
+    { name: "Masar Constantine", wilayaId: 25, address: "Rue Abane Ramdane, Constantine", hours: "Sam-Jeu 8:30-17:30" },
+  ])
+    desks.push(await createDesk(db, { ...d, communeId: byWilaya.get(d.wilayaId)![0] }));
+  const extra = async (x: Partial<NewParcel> & { merchantId: string }, i: number) =>
+    createParcel(db, { recipientName: NAMES[i % NAMES.length], recipientPhone: `0661 ${String(30 + i)} 45 ${String(10 + i)}`, destWilayaId: 16, communeId: byWilaya.get(16)![i % 20], address: `${10 + i} rue Hassiba Ben Bouali`, description: GOODS[i % GOODS.length], weightKg: 1, codAmount: 3200 + i * 450, ...x }, A);
+  const run = async (id: string, to: Status[], cid = c1.id) => {
+    for (const s of to) await transition(db, { parcelId: id, to: s, actor: s === "picked_up" ? courier(cid) : s === "at_origin_hub" || s === "ready_for_pickup" ? H : A, courierId: s === "pickup_assigned" || s === "out_for_delivery" ? cid : undefined });
+  };
+  const shelf = await extra({ merchantId: m1.id, deliveryType: "desk", stopDeskId: desks[0].id }, 1);
+  await run(shelf.id, ["pickup_assigned", "picked_up", "at_origin_hub", "ready_for_pickup"]);
+  const arrived = await extra({ merchantId: m2.id, deliveryType: "desk", stopDeskId: desks[0].id }, 2);
+  await run(arrived.id, ["pickup_assigned", "picked_up", "at_origin_hub"]);
+  const swap = await extra({ merchantId: m1.id, exchange: true, exchangeNote: "Robe bleue taille M (mauvaise taille)" }, 3);
+  await run(swap.id, ["pickup_assigned", "picked_up", "at_origin_hub", "out_for_delivery"]);
+  const part = await extra({ merchantId: m1.id, allowPartial: true, description: "3 articles: robe, foulard, sac" }, 4);
+  await run(part.id, ["pickup_assigned", "picked_up", "at_origin_hub", "out_for_delivery"], c2.id);
+  await setConfirmOrders(db, m2.id, true);
+  await extra({ merchantId: m2.id, description: "Casque Bluetooth" }, 5);
 
   // Half of the cash each Algiers courier collected has been handed over, and one merchant paid once.
   let banked = 0;

@@ -2,7 +2,7 @@ import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import type { Q } from "../db";
 import { PARCEL_KINDS, renderParcelSms as renderText, renderResetSms, segments, type Lang, type ParcelKind, type ParcelVars } from "../domain/sms-text";
 import { maskPhone, toE164 } from "../phone";
-import { merchants, parcels, settings, smsMessages, users } from "../schema";
+import { merchants, parcels, settings, smsMessages, stopDesks, users } from "../schema";
 
 /**
  * Text messages to recipients and users.
@@ -26,10 +26,13 @@ export function appUrl() {
 export const renderParcelSms = (kind: ParcelKind, lang: Lang, v: ParcelVars) => renderText(kind, lang, v, appUrl());
 export { renderResetSms, segments };
 
+/** How long a stop desk keeps a parcel before it goes back to the merchant. */
+export const DESK_HOLD_DAYS = 7;
+
 // ---------- settings ----------
 
 export type SmsSettings = { enabled: Record<ParcelKind, boolean> };
-const DEFAULTS: SmsSettings = { enabled: { out_for_delivery: true, attempt_failed: true, delivered: false } };
+const DEFAULTS: SmsSettings = { enabled: { confirm_order: true, ready_at_desk: true, out_for_delivery: true, attempt_failed: true, delivered: false } };
 
 export async function getSmsSettings(q: Q): Promise<SmsSettings> {
   const [r] = await q.select().from(settings).where(eq(settings.key, "sms"));
@@ -63,10 +66,14 @@ export async function queueParcelSms(q: Q, parcelId: string, kind: ParcelKind) {
       merchantPhone: merchants.phone,
       courier: users.name,
       courierPhone: users.phone,
+      desk: stopDesks.name,
+      deskAddress: stopDesks.address,
+      hours: stopDesks.hours,
     })
     .from(parcels)
     .innerJoin(merchants, eq(parcels.merchantId, merchants.id))
     .leftJoin(users, eq(parcels.courierId, users.id))
+    .leftJoin(stopDesks, eq(parcels.stopDeskId, stopDesks.id))
     .where(eq(parcels.id, parcelId));
   if (!p) return null;
   const to = toE164(p.phone);
@@ -78,7 +85,11 @@ export async function queueParcelSms(q: Q, parcelId: string, kind: ParcelKind) {
     cod: p.cod,
     courier: p.courier?.split(" ")[0],
     courierPhone: p.courierPhone ?? "",
-    code: kind === "out_for_delivery" ? p.code : undefined,
+    code: kind === "out_for_delivery" || kind === "ready_at_desk" ? p.code : undefined,
+    desk: p.desk ?? undefined,
+    deskAddress: p.deskAddress ?? undefined,
+    hours: p.hours ?? undefined,
+    days: DESK_HOLD_DAYS,
   });
   // One message per parcel, kind and delivery attempt, however often the event is replayed.
   const [m] = await q

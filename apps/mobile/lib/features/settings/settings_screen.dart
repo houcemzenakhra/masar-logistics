@@ -11,6 +11,12 @@ import '../auth/auth_controller.dart';
 
 const _roles = {'courier': 'Courier', 'hub': 'Hub team', 'admin': 'Operations', 'merchant': 'Merchant'};
 
+/// Whether this merchant's new orders wait for the recipient's confirmation.
+final _confirmOrdersProvider = FutureProvider.autoDispose<bool>((ref) async {
+  final r = await ref.read(apiProvider).get('/merchant/settings');
+  return r['confirmOrders'] == true;
+});
+
 class SettingsScreen extends ConsumerWidget {
   const SettingsScreen({super.key});
 
@@ -48,6 +54,25 @@ class SettingsScreen extends ConsumerWidget {
             child: Column(children: [for (final l in supportedLangs) RadioListTile<String>(value: l, title: Text(langNames[l]!))]),
           ),
         ),
+        if (user.role == 'merchant') ...[
+          SectionTitle(tr('Order confirmation')),
+          CardBox(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            child: ref.watch(_confirmOrdersProvider).when(
+                  loading: () => const Padding(padding: EdgeInsets.all(12), child: LinearProgressIndicator()),
+                  error: (e, _) => ErrorRetry(error: e, onRetry: () => ref.invalidate(_confirmOrdersProvider)),
+                  data: (on) => SwitchListTile(
+                    value: on,
+                    title: Text(tr('Ask recipients to confirm each new order')),
+                    subtitle: Text(tr('They get a text message with a link to confirm or cancel. A cancelled order costs you nothing.')),
+                    onChanged: (v) async {
+                      final r = await runAction(context, () => ref.read(apiProvider).post('/merchant/settings', {'confirmOrders': v}));
+                      if (r != null) ref.invalidate(_confirmOrdersProvider);
+                    },
+                  ),
+                ),
+          ),
+        ],
         SectionTitle(tr('This phone')),
         CardBox(
           child: Column(children: [

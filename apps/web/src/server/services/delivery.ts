@@ -34,6 +34,9 @@ export type DeliverInput = {
   note?: string;
   idempotencyKey?: string;
   at?: Date;
+  /** Partial delivery: cash actually taken, and what the recipient did not keep. */
+  collected?: number;
+  returnedItems?: string;
 };
 
 /**
@@ -52,11 +55,15 @@ export async function deliver(db: Q, input: DeliverInput) {
     const [p] = await tx.select().from(parcels).where(eq(parcels.id, input.parcelId));
     if (!p) throw new DomainError("Parcel not found");
     if (code && code !== p.deliveryCode) throw new DomainError("Wrong delivery code. Ask the recipient to read it again from the text message.");
+    // At a stop desk anyone could ask for a parcel: the code from the text message is the proof.
+    if (p.status === "ready_for_pickup" && input.actor.role !== "admin" && !code) {
+      throw new DomainError("Ask for the code from the recipient's text message");
+    }
     const cfg = await getDeliverySettings(tx);
     if (cfg.proof === "required" && input.actor.role !== "admin" && !code && !photo && !signature) {
       throw new DomainError("Record a proof of delivery: the recipient's code, a photo or a signature");
     }
-    const updated = await transition(tx, { parcelId: p.id, to: "delivered", actor: input.actor, note: input.note, idempotencyKey: input.idempotencyKey, at: input.at });
+    const updated = await transition(tx, { parcelId: p.id, to: "delivered", actor: input.actor, note: input.note, idempotencyKey: input.idempotencyKey, at: input.at, collected: input.collected, returnedItems: input.returnedItems });
     const common = { parcelId: p.id, receivedBy: input.receivedBy?.trim().slice(0, 80) ?? "", lat: input.lat ?? null, lng: input.lng ?? null, actorId: input.actor.userId, createdAt: input.at ?? new Date() };
     const rows = [
       ...(code ? [{ ...common, kind: "code" as const, image: null }] : []),

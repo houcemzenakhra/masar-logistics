@@ -1,15 +1,19 @@
 import { createParcelAction } from "@/app/actions";
-import { CommuneSelect } from "@/components/commune-select";
+import { DestinationFields, OrderOptions } from "@/components/destination-fields";
 import { ActionForm, Submit } from "@/components/forms";
 import { Card, Field, Input, LinkButton, PageHeader, Select } from "@/components/ui";
 import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
+import { eq } from "drizzle-orm";
+import { merchants } from "@/server/schema";
+import { getDeskSettings } from "@/server/services/desks";
 import { listWilayas } from "@/server/services/directory";
 
 export default async function NewOrder() {
-  await requireRole("merchant");
-  const wilayas = await listWilayas(await getDb());
+  const s = await requireRole("merchant");
+  const db = await getDb();
+  const [wilayas, desk, [m]] = await Promise.all([listWilayas(db), getDeskSettings(db), db.select({ confirm: merchants.confirmOrders }).from(merchants).where(eq(merchants.id, s.merchantId!))]);
   return (
     <>
       <PageHeader
@@ -21,10 +25,7 @@ export default async function NewOrder() {
         <ActionForm action={createParcelAction} className="grid gap-4 sm:grid-cols-2">
           <Field label={t("Recipient name")}><Input name="recipientName" required autoComplete="off" /></Field>
           <Field label={t("Recipient phone")}><Input name="recipientPhone" required inputMode="tel" placeholder="0550 12 34 56" dir="ltr" /></Field>
-          <CommuneSelect wilayas={wilayas} />
-          <div className="sm:col-span-2">
-            <Field label={t("Address")} hint={t("Street, building, or a landmark the courier can find.")}><Input name="address" required /></Field>
-          </div>
+          <DestinationFields wilayas={wilayas} deskDiscount={desk.discount} />
           <Field label={t("Cash to collect (DZD)")} hint={t("Enter 0 if the order is already paid.")}><Input name="codAmount" required inputMode="numeric" defaultValue={0} dir="ltr" className="tnum" /></Field>
           <Field label={t("Weight (kg)")}><Input name="weightKg" required type="number" min={0.1} max={70} step={0.1} defaultValue={1} dir="ltr" className="tnum" /></Field>
           <Field label={t("Contents (optional)")}><Input name="description" maxLength={120} /></Field>
@@ -34,6 +35,8 @@ export default async function NewOrder() {
               <option value="ar">العربية</option>
             </Select>
           </Field>
+          <OrderOptions />
+          {m?.confirm && <p className="text-sm text-muted sm:col-span-2">{t("The recipient gets a text message to confirm the order. It is picked up once they confirm.")}</p>}
           <div className="sm:col-span-2"><Submit>{t("Create order")}</Submit></div>
         </ActionForm>
       </Card>

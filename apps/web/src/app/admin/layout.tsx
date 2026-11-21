@@ -16,13 +16,14 @@ const ADMIN: NavItem[] = [
   { href: "/admin/finance", label: "Finance", icon: "banknote" },
   { href: "/admin/claims", label: "Claims", icon: "claims" },
   { href: "/admin/network", label: "Network", icon: "network" },
+  { href: "/admin/desks", label: "Stop desks", icon: "building" },
   { href: "/admin/pricing", label: "Pricing", icon: "tags" },
   { href: "/admin/sms", label: "Text messages", icon: "sms" },
   { href: "/admin/team", label: "Team", icon: "team" },
   { href: "/admin/audit", label: "Audit log", icon: "audit" },
   { href: "/admin/settings", label: "Settings", icon: "settings" },
 ];
-const HUB = ["/admin/scan", "/admin/linehaul", "/admin/parcels", "/admin/dispatch", "/admin/live", "/admin/finance/cash"];
+const HUB = ["/admin/scan", "/admin/desks", "/admin/linehaul", "/admin/parcels", "/admin/dispatch", "/admin/live", "/admin/finance/cash"];
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
   const s = await requireRole("admin", "hub");

@@ -35,6 +35,26 @@ const TEXTS = {
     fr: ["Livré", "{tracking} pour {name} a été livré. {amount} DA ajoutés à votre solde."],
     ar: ["تم التسليم", "تم تسليم {tracking} إلى {name}. أضيف {amount} دج إلى رصيدك."],
   },
+  confirmed: {
+    en: ["Order confirmed", "{name} confirmed {tracking}. It can now be picked up."],
+    fr: ["Commande confirmée", "{name} a confirmé {tracking}. Le colis peut être ramassé."],
+    ar: ["تم تأكيد الطلب", "أكّد {name} الطلب {tracking}. يمكن استلامه الآن."],
+  },
+  declined: {
+    en: ["Order declined", "{name} declined {tracking}. It was cancelled; no fees."],
+    fr: ["Commande refusée", "{name} a refusé {tracking}. Elle est annulée, sans frais."],
+    ar: ["رُفض الطلب", "رفض {name} الطلب {tracking}. أُلغي دون رسوم."],
+  },
+  partial: {
+    en: ["Partly delivered", "{name} kept part of {tracking} and paid {amount} DZD. The rest comes back as {leg}."],
+    fr: ["Livré en partie", "{name} a gardé une partie de {tracking} et payé {amount} DA. Le reste revient avec {leg}."],
+    ar: ["سُلّم جزئياً", "احتفظ {name} بجزء من {tracking} ودفع {amount} دج. يعود الباقي مع {leg}."],
+  },
+  exchange_back: {
+    en: ["Exchange collected", "The item from {name} ({tracking}) is coming back to you as {leg}."],
+    fr: ["Échange récupéré", "L'article de {name} ({tracking}) vous revient avec {leg}."],
+    ar: ["تم استلام الاستبدال", "القطعة من {name} ({tracking}) في طريقها إليك مع {leg}."],
+  },
   failed: {
     en: ["Delivery failed", "{tracking} for {name}: {reason}. Attempt {n} of {max}."],
     fr: ["Échec de livraison", "{tracking} pour {name} : {reason}. Tentative {n} sur {max}."],

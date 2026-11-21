@@ -13,7 +13,12 @@ export function Label({ p }: { p: ParcelView }) {
     <article dir="ltr" lang="fr" className="label overflow-hidden rounded-xl border-2 border-ink bg-white text-ink">
       <header className="flex items-center justify-between border-b-2 border-ink px-4 py-3">
         <Logo />
-        <span className="rounded-md bg-ink px-2.5 py-1 font-mono text-lg font-bold text-white">{String(p.destWilayaId).padStart(2, "0")}</span>
+        <span className="flex items-center gap-2">
+          {/* Sorted apart on the hub floor: these never go out with a courier. */}
+          {p.deliveryType === "desk" && <span className="rounded-md border-2 border-ink px-2 py-0.5 text-sm font-bold">POINT RELAIS</span>}
+          {p.kind === "return_leg" && <span className="rounded-md border-2 border-ink px-2 py-0.5 text-sm font-bold">RETOUR</span>}
+          <span className="rounded-md bg-ink px-2.5 py-1 font-mono text-lg font-bold text-white">{String(p.destWilayaId).padStart(2, "0")}</span>
+        </span>
       </header>
       <section className="border-b-2 border-ink px-4 py-3">
         <p className="text-[11px] uppercase tracking-wide text-muted">Destinataire</p>
@@ -31,6 +36,8 @@ export function Label({ p }: { p: ParcelView }) {
           <p className="text-[11px] uppercase tracking-wide text-muted">Hub</p>
           <p className="mt-1 text-sm font-semibold">{p.destHub}</p>
           <p className="text-sm">{p.weightKg} kg · {p.description || "Colis"}</p>
+          {p.exchange && <p className="mt-1 text-sm font-bold">ÉCHANGE : reprendre {p.exchangeNote}</p>}
+          {p.allowPartial && <p className="mt-1 text-xs">Livraison partielle acceptée</p>}
         </div>
       </section>
       <section className="px-4 py-4 text-center">

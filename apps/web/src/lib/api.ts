@@ -3,6 +3,7 @@ import { apiSession } from "@/lib/session";
 import type { Session } from "@/server/auth";
 import type { Role } from "@/server/domain/state";
 import { DomainError } from "@/server/services/parcels";
+import { DeskError } from "@/server/services/desks";
 
 export const json = (data: unknown, status = 200) => Response.json(data, { status });
 export const fail = (status: number, error: string) => Response.json({ error }, { status });
@@ -29,7 +30,7 @@ export function route<C>(fn: (req: Request, ctx: C) => Promise<Response>) {
       return await fn(req, ctx);
     } catch (e) {
       if (e instanceof HttpError) return fail(e.status, e.message);
-      if (e instanceof DomainError) return fail(422, e.message);
+      if (e instanceof DomainError || e instanceof DeskError) return fail(422, e.message);
       if (e instanceof z.ZodError) return fail(400, e.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
       if (e instanceof SyntaxError) return fail(400, "Body must be JSON");
       console.error(e);

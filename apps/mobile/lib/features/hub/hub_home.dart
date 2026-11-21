@@ -95,7 +95,11 @@ class HubHome extends ConsumerWidget {
               Expanded(child: OutlinedButton.icon(onPressed: () => context.push('/hub/manifests'), icon: const Icon(Icons.local_shipping_outlined), label: Text(tr('Trucks')))),
             ]),
             const SizedBox(height: 10),
-            OutlinedButton.icon(onPressed: () => context.push('/hub/cash'), icon: const Icon(Icons.payments_outlined), label: Text(tr('Courier cash'))),
+            Row(children: [
+              Expanded(child: OutlinedButton.icon(onPressed: () => context.push('/hub/cash'), icon: const Icon(Icons.payments_outlined), label: Text(tr('Courier cash')))),
+              const SizedBox(width: 10),
+              Expanded(child: OutlinedButton.icon(onPressed: () => context.push('/hub/desk'), icon: const Icon(Icons.storefront_outlined), label: Text(tr('Stop desk')))),
+            ]),
             if (s.incoming.isNotEmpty) ...[
               SectionTitle(tr('Trucks on their way here')),
               for (final m in s.incoming)

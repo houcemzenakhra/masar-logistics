@@ -29,6 +29,8 @@ import { rate, reschedule, setInstructions, verifyRecipient } from "@/server/ser
 import { optimiseCourierRoute } from "@/server/services/routes";
 import { LIMITS, audit, checkLimit, clearLimit, createResetToken, rateLimit, resetPassword } from "@/server/services/security";
 import { registerMerchant, setMerchantStatus } from "@/server/services/signup";
+import { DeskError, createDesk, setDeskActive, setDeskSettings } from "@/server/services/desks";
+import { answerConfirmation, setConfirmOrders, setHistorySettings } from "@/server/services/returns";
 import { PARCEL_KINDS, dispatch, queueSms, renderResetSms, setSmsSettings } from "@/server/services/sms";
 
 /** Turns expected failures into a translated message for the form; anything else still throws. */
@@ -38,7 +40,7 @@ async function guard(fn: (t: Awaited<ReturnType<typeof getT>>) => Promise<FormSt
     return (await fn(t)) ?? {};
   } catch (e) {
     if (e instanceof z.ZodError) return { error: t(e.issues[0].message) };
-    if (e instanceof DomainError) return { error: t(e.message) };
+    if (e instanceof DomainError || e instanceof DeskError) return { error: t(e.message) };
     if (e instanceof Error && /only holds|is owed|available to pay|positive whole/.test(e.message)) return { error: t(e.message) };
     throw e;
   }
@@ -213,23 +215,38 @@ export async function staffActiveAction(_: FormState, fd: FormData): Promise<For
 
 // ---------- parcels ----------
 
-const NewParcel = z.object({
+const ParcelCommon = {
   recipientName: z.string().trim().min(2, "Enter the recipient's name"),
   recipientPhone: z.string().trim().regex(PHONE, "Enter a mobile number like 0550 12 34 56"),
   destWilayaId: z.coerce.number().int().min(1, "Choose a wilaya"),
-  communeId: z.coerce.number().int().min(1, "Choose a commune"),
-  address: z.string().trim().min(4, "Enter the address or a landmark"),
   description: z.string().trim().max(120).optional(),
   weightKg: z.coerce.number().min(0.1, "Weight must be above 0").max(70, "Maximum weight is 70 kg"),
   codAmount: z.coerce.number().int("COD must be a whole number of dinars").min(0).max(2_000_000),
   recipientLang: z.enum(["fr", "ar"]).default("fr"),
-});
+  allowPartial: z.preprocess((v) => v === "on" || v === true, z.boolean()),
+  exchange: z.preprocess((v) => v === "on" || v === true, z.boolean()),
+  exchangeNote: z.string().trim().max(200).optional(),
+};
+const NewParcel = z.discriminatedUnion("deliveryType", [
+  z.object({
+    ...ParcelCommon,
+    deliveryType: z.literal("home"),
+    communeId: z.coerce.number().int().min(1, "Choose a commune"),
+    address: z.string().trim().min(4, "Enter the address or a landmark"),
+  }),
+  z.object({
+    ...ParcelCommon,
+    deliveryType: z.literal("desk"),
+    stopDeskId: z.string().min(1, "Choose the stop desk"),
+    address: z.string().optional().default(""),
+  }),
+]);
 
 export async function createParcelAction(_: FormState, fd: FormData): Promise<FormState> {
   const s = await requireRole("merchant", "admin");
   let id = "";
   const res = await guard(async () => {
-    const input = NewParcel.parse(Object.fromEntries(fd));
+    const input = NewParcel.parse({ deliveryType: "home", ...Object.fromEntries(fd) });
     const merchantId = s.role === "merchant" ? s.merchantId! : str(fd, "merchantId");
     if (!merchantId) throw new DomainError("Choose a merchant");
     const p = await createParcel(await getDb(), { ...input, recipientPhone: normalizeMobile(input.recipientPhone) ?? input.recipientPhone, weightKg: Math.ceil(input.weightKg), merchantId }, s);
@@ -504,17 +521,100 @@ export async function smsTestAction(_: FormState, fd: FormData): Promise<FormSta
 // ---------- delivery with proof ----------
 
 export async function deliverAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("courier", "admin");
+  const s = await requireRole("courier", "hub", "admin");
   return guard(async () => {
+    const partial = fd.get("partial") === "on";
     await deliver(await getDb(), {
       parcelId: str(fd, "parcelId"),
       actor: s,
       code: str(fd, "code") || undefined,
       photo: str(fd, "photos") || undefined,
       receivedBy: str(fd, "receivedBy") || undefined,
+      collected: partial ? Number(str(fd, "collected").replace(/\D/g, "") || "0") : undefined,
+      returnedItems: partial ? str(fd, "returnedItems") : undefined,
     });
     kick();
     refresh();
+  });
+}
+
+// ---------- returns: confirmation, stop desks, recipient history ----------
+
+export async function confirmOrderAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant", "admin");
+  return guard(async (t) => {
+    const yes = fd.get("answer") === "yes";
+    await answerConfirmation(await getDb(), str(fd, "parcelId"), yes, s);
+    kick();
+    refresh();
+    return { ok: yes ? t("Confirmed. The order can be picked up.") : t("Cancelled. No fees.") };
+  });
+}
+
+export async function recipientConfirmAction(_: FormState, fd: FormData): Promise<FormState> {
+  return guard(async (t) => {
+    const yes = fd.get("answer") === "yes";
+    await answerConfirmation(await getDb(), await recipientGuard(fd), yes, "recipient");
+    kick();
+    refresh();
+    return { ok: yes ? t("Thank you. Your order is on its way to being shipped.") : t("Your order is cancelled. You have nothing to pay.") };
+  });
+}
+
+export async function confirmOrdersSettingAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const on = fd.get("confirmOrders") === "on";
+    await setConfirmOrders(await getDb(), s.merchantId!, on);
+    await log(s, "merchant.confirm_orders", "merchant", s.merchantId!, { on });
+    refresh();
+    return { ok: on ? t("New orders now wait for the recipient's confirmation.") : t("New orders are picked up without confirmation.") };
+  });
+}
+
+export async function createDeskAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const d = await createDesk(await getDb(), {
+      name: str(fd, "name"),
+      wilayaId: Number(str(fd, "destWilayaId")),
+      communeId: Number(str(fd, "communeId")) || undefined,
+      address: str(fd, "address"),
+      phone: normalizeMobile(str(fd, "phone")) ?? str(fd, "phone"),
+      hours: str(fd, "hours"),
+    });
+    await log(s, "desk.create", "stop_desk", d.id, { code: d.code, name: d.name });
+    refresh();
+    return { ok: t("Stop desk {code} is open.", { code: d.code }) };
+  });
+}
+
+export async function deskActiveAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async () => {
+    const active = fd.get("active") === "1";
+    const d = await setDeskActive(await getDb(), str(fd, "id"), active);
+    await log(s, active ? "desk.open" : "desk.close", "stop_desk", d.id, { code: d.code });
+    refresh();
+  });
+}
+
+export async function returnsSettingsAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const db = await getDb();
+    // Two forms post here: the stop desk discount, and the recipient history switch.
+    if (fd.has("discount")) {
+      const discount = Number(str(fd, "discount"));
+      await setDeskSettings(db, { discount });
+      await log(s, "settings.desks", "settings", null, { discount });
+    } else {
+      const history = fd.get("history") === "on";
+      await setHistorySettings(db, { enabled: history });
+      await log(s, "settings.recipient_history", "settings", null, { enabled: history });
+    }
+    refresh();
+    return { ok: t("Saved.") };
   });
 }
 

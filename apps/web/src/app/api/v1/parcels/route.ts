@@ -27,17 +27,24 @@ const Body = z.object({
   /** Preferred: an id from GET /wilayas/:id/communes. */
   communeId: z.number().int().optional(),
   commune: z.string().trim().min(2).optional(),
-  address: z.string().trim().min(4),
+  /** Required for home delivery; ignored for a stop desk (the desk's address is used). */
+  address: z.string().trim().min(4).optional(),
   description: z.string().trim().max(120).optional(),
   weightKg: z.number().min(0.1).max(70),
   codAmount: z.number().int().min(0).max(2_000_000),
-});
+  /** `desk`: the recipient collects at `stopDeskId` (GET /desks?wilaya=). Default `home`. */
+  deliveryType: z.enum(["home", "desk"]).optional(),
+  stopDeskId: z.string().optional(),
+  allowPartial: z.boolean().optional(),
+  exchange: z.boolean().optional(),
+  exchangeNote: z.string().trim().max(200).optional(),
+}).refine((b) => b.deliveryType === "desk" || !!b.address, { message: "address is required for home delivery", path: ["address"] });
 
 export const POST = route(async (req) => {
   const s = await auth(req, "merchant", "admin");
   const b = Body.parse(await req.json());
   const merchantId = s.role === "merchant" ? s.merchantId! : b.merchantId;
   if (!merchantId) throw new DomainError("merchantId is required");
-  const parcel = await createParcel(await getDb(), { ...b, recipientPhone: normalizeMobile(b.recipientPhone)!, weightKg: Math.ceil(b.weightKg), merchantId }, s);
+  const parcel = await createParcel(await getDb(), { ...b, address: b.address ?? "", recipientPhone: normalizeMobile(b.recipientPhone)!, weightKg: Math.ceil(b.weightKg), merchantId }, s);
   return json({ parcel }, 201);
 });

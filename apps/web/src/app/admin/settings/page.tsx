@@ -1,4 +1,4 @@
-import { companyAction, deliverySettingsAction } from "@/app/actions";
+import { companyAction, deliverySettingsAction, returnsSettingsAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, CardHeader, Field, Input, PageHeader, Stat } from "@/components/ui";
 import { t } from "@/lib/i18n";
@@ -7,13 +7,14 @@ import { getDb } from "@/server/db";
 import { getDeliverySettings } from "@/server/services/delivery";
 import { getCompany } from "@/server/services/money";
 import { pushStats } from "@/server/services/notify";
+import { getHistorySettings } from "@/server/services/returns";
 
 export const metadata = { title: "Settings" };
 
 export default async function Settings() {
   await requireRole("admin");
   const db = await getDb();
-  const [cfg, push, company] = await Promise.all([getDeliverySettings(db), pushStats(db), getCompany(db)]);
+  const [cfg, push, company, history] = await Promise.all([getDeliverySettings(db), pushStats(db), getCompany(db), getHistorySettings(db)]);
   const options = [
     ["optional", "Optional", "Couriers can record the recipient's code, a photo or a signature, and can deliver without."],
     ["required", "Required", "Couriers must record at least one proof to mark a parcel delivered. Operations can still deliver without."],
@@ -34,6 +35,19 @@ export default async function Settings() {
                 </label>
               ))}
             </div>
+            <Submit>{t("Save")}</Submit>
+          </ActionForm>
+        </Card>
+        <Card>
+          <CardHeader title={t("Recipient history")} hint={t("Before shipping, merchants see how a recipient's past orders went: how many were delivered, refused or returned.")} />
+          <ActionForm action={returnsSettingsAction} className="space-y-3 p-5">
+            <label className="flex items-start gap-3">
+              <input type="checkbox" name="history" defaultChecked={history.enabled} className="mt-0.5 size-4 shrink-0 accent-[#ff5b24]" />
+              <span className="text-sm">
+                <span className="font-medium">{t("Show recipient history to merchants")}</span>
+                <span className="block text-muted">{t("Counts only, from the last 12 months, and only on the merchant's own orders. No names, shops or addresses are shared.")}</span>
+              </span>
+            </label>
             <Submit>{t("Save")}</Submit>
           </ActionForm>
         </Card>

@@ -7,23 +7,27 @@ import '../../core/models.dart';
 import '../../core/outbox.dart';
 
 class CourierTasks {
-  const CourierTasks({required this.cash, required this.proofRequired, required this.pickups, required this.deliveries});
+  const CourierTasks({required this.cash, required this.proofRequired, required this.pickups, required this.deliveries, this.returns = const []});
   final int cash;
   final bool proofRequired;
   final List<Parcel> pickups;
   final List<Parcel> deliveries;
+
+  /// Goods taken back at the door (partial deliveries, exchanges), to hand in at the hub.
+  final List<Parcel> returns;
 
   int get codToCollect => deliveries.fold(0, (a, p) => a + p.codAmount);
 }
 
 final courierTasksProvider = FutureProvider<CourierTasks>((ref) async {
   final res = await ref.read(apiProvider).get('/courier/tasks');
-  List<Parcel> list(String k) => (res[k] as List).map((e) => Parcel.fromJson(e as Map<String, dynamic>)).toList();
+  List<Parcel> list(String k) => ((res[k] as List?) ?? const []).map((e) => Parcel.fromJson(e as Map<String, dynamic>)).toList();
   return CourierTasks(
     cash: (res['cashToHandOver'] as num).toInt(),
     proofRequired: res['proofRequired'] == true,
     pickups: list('pickups'),
     deliveries: list('deliveries'),
+    returns: list('returns'),
   );
 });
 
@@ -40,6 +44,10 @@ class DeliveryProof {
   String? photo;
   String? signature;
   String receivedBy;
+
+  /// Partial delivery: cash actually taken, and what the recipient did not keep.
+  int? collected;
+  String returnedItems = '';
 
   bool get any => code.length == 4 || photo != null || signature != null;
 }
@@ -63,10 +71,12 @@ class CourierActions {
         if (proof.photo != null) 'photo': proof.photo,
         if (proof.signature != null) 'signature': proof.signature,
         if (proof.receivedBy.trim().isNotEmpty) 'receivedBy': proof.receivedBy.trim(),
+        if (proof.collected != null) 'collected': proof.collected,
+        if (proof.collected != null) 'returnedItems': proof.returnedItems.trim(),
         if (pos != null) 'lat': pos.latitude,
         if (pos != null) 'lng': pos.longitude,
       },
-      label: '${p.tracking} · ${tr('Delivered')}',
+      label: '${p.tracking} · ${proof.collected != null ? tr('Partial delivery') : tr('Delivered')}',
     ));
   }
 

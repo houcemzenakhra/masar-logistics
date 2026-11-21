@@ -5,7 +5,9 @@
 import { money } from "./money";
 
 export type Lang = "fr" | "ar";
-export const PARCEL_KINDS = ["out_for_delivery", "attempt_failed", "delivered"] as const;
+export const PARCEL_KINDS = ["confirm_order", "out_for_delivery", "ready_at_desk", "attempt_failed", "delivered"] as const;
+/** The messages every parcel can get, whatever the merchant's options. Shown on the public site. */
+export const MAIN_KINDS = ["out_for_delivery", "attempt_failed", "delivered"] as const;
 export type ParcelKind = (typeof PARCEL_KINDS)[number];
 
 /**
@@ -13,6 +15,14 @@ export type ParcelKind = (typeof PARCEL_KINDS)[number];
  * fits in 160 characters per part. Arabic always uses Unicode: 70 characters per part.
  */
 const TEMPLATES: Record<ParcelKind, Record<Lang, string>> = {
+  confirm_order: {
+    fr: "Masar: {merchant} a prepare votre commande.{cod} Confirmez-la ou annulez-la ici: {link}",
+    ar: "مسار: {merchant} جهّز طلبيتك.{cod} أكّدها أو ألغها من هنا: {link}",
+  },
+  ready_at_desk: {
+    fr: "Masar: votre colis {merchant} vous attend au point relais {desk}, {deskAddress}{hours}.{cod}{code} A retirer sous {days} jours. {link}",
+    ar: "مسار: طردك من {merchant} ينتظرك في نقطة الاستلام {desk}، {deskAddress}{hours}.{cod}{code} يُسحب خلال {days} أيام. {link}",
+  },
   out_for_delivery: {
     fr: "Masar: votre colis {merchant} est en livraison aujourd'hui.{cod}{code} Livreur {courier}: {courierPhone}. Suivi: {link}",
     ar: "مسار: طردك من {merchant} في الطريق إليك اليوم.{cod}{code} عامل التوصيل {courier}: {courierPhone}. التتبع: {link}",
@@ -37,7 +47,21 @@ const RESET: Record<Lang, string> = {
 
 const fill = (tpl: string, v: Record<string, string | number>) => tpl.replace(/\{(\w+)\}/g, (_, k) => String(v[k] ?? ""));
 
-export type ParcelVars = { tracking: string; merchant: string; merchantPhone: string; cod: number; courier?: string; courierPhone?: string; code?: string };
+export type ParcelVars = {
+  tracking: string;
+  merchant: string;
+  merchantPhone: string;
+  cod: number;
+  courier?: string;
+  courierPhone?: string;
+  code?: string;
+  /** Stop desk name, address and opening hours, for `ready_at_desk`. */
+  desk?: string;
+  deskAddress?: string;
+  hours?: string;
+  /** Days the desk keeps the parcel. */
+  days?: number;
+};
 
 /**
  * In Arabic text a phone number like "0770 11 22 33" is broken up by the right-to-left layout.
@@ -54,6 +78,10 @@ export function renderParcelSms(kind: ParcelKind, lang: Lang, v: ParcelVars, bas
     courierPhone: ltr(lang, v.courierPhone ?? ""),
     cod: v.cod > 0 ? fill(COD[lang], { amount: money(v.cod) }) : "",
     code: v.code ? fill(CODE[lang], { code: ltr(lang, v.code) }) : "",
+    desk: v.desk ?? "",
+    deskAddress: v.deskAddress ?? "",
+    hours: v.hours ? ` (${v.hours})` : "",
+    days: v.days ?? 7,
     link: `${base}/t/${v.tracking}`,
   });
 }

@@ -55,6 +55,8 @@ export const merchants = pgTable("merchants", {
   legalName: text("legal_name").notNull().default(""),
   nif: text("nif").notNull().default(""),
   rc: text("rc").notNull().default(""),
+  /** New orders wait for the recipient to confirm them (by text message) before a courier is sent. */
+  confirmOrders: boolean("confirm_orders").notNull().default(false),
   createdAt: createdAt(),
 });
 
@@ -183,6 +185,28 @@ export const importBatches = pgTable(
   (t) => [index("import_batches_merchant_idx").on(t.merchantId)],
 );
 
+/** A counter where recipients collect parcels themselves, run by a hub. */
+export const stopDesks = pgTable(
+  "stop_desks",
+  {
+    id: id(),
+    code: text("code").notNull().unique(),
+    name: text("name").notNull(),
+    hubId: text("hub_id").notNull().references(() => hubs.id),
+    wilayaId: integer("wilaya_id").notNull().references(() => wilayas.id),
+    communeId: integer("commune_id").references(() => communes.id),
+    address: text("address").notNull(),
+    phone: text("phone").notNull().default(""),
+    /** Opening hours as shown to recipients, e.g. "Sat-Thu 9:00-18:00". */
+    hours: text("hours").notNull().default(""),
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    active: boolean("active").notNull().default(true),
+    createdAt: createdAt(),
+  },
+  (t) => [index("stop_desks_wilaya_idx").on(t.wilayaId)],
+);
+
 export const parcels = pgTable(
   "parcels",
   {
@@ -228,6 +252,23 @@ export const parcels = pgTable(
     /** Recipient's rating of the delivery, 1 to 5. */
     rating: integer("rating"),
     ratingComment: text("rating_comment").notNull().default(""),
+    /** `pending` while the recipient has not confirmed the order; no pickup until then. */
+    confirmation: text("confirmation", { enum: ["none", "pending", "confirmed", "declined"] }).notNull().default("none"),
+    confirmedAt: timestamp("confirmed_at", { withTimezone: true }),
+    /** `desk`: the recipient collects it at `stopDeskId` instead of a courier coming to the door. */
+    deliveryType: text("delivery_type", { enum: ["home", "desk"] }).notNull().default("home"),
+    stopDeskId: text("stop_desk_id").references(() => stopDesks.id),
+    /** The recipient may keep part of the order and pay less; the rest comes back. */
+    allowPartial: boolean("allow_partial").notNull().default(false),
+    /** Exchange: the courier collects an item from the recipient on delivery. `exchangeNote` says which. */
+    exchange: boolean("exchange").notNull().default(false),
+    exchangeNote: text("exchange_note").notNull().default(""),
+    /** Cash actually taken on delivery, when it differs from `codAmount` (partial delivery). */
+    collectedAmount: integer("collected_amount"),
+    /** `return_leg`: goods coming back to the merchant after a partial delivery or an exchange. */
+    kind: text("kind", { enum: ["delivery", "return_leg"] }).notNull().default("delivery"),
+    /** For a return leg: the delivery it comes from. */
+    parentId: text("parent_id"),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -237,6 +278,8 @@ export const parcels = pgTable(
     index("parcels_merchant_idx").on(t.merchantId),
     index("parcels_courier_idx").on(t.courierId),
     index("parcels_bag_idx").on(t.bagId),
+    index("parcels_phone_idx").on(t.recipientPhone),
+    index("parcels_parent_idx").on(t.parentId),
   ],
 );
 
@@ -503,7 +546,7 @@ export const recipientRequests = pgTable(
   {
     id: id(),
     parcelId: text("parcel_id").notNull().references(() => parcels.id),
-    kind: text("kind", { enum: ["reschedule", "instructions", "rating"] }).notNull(),
+    kind: text("kind", { enum: ["reschedule", "instructions", "rating", "confirm", "decline"] }).notNull(),
     payload: jsonb("payload").notNull(),
     createdAt: createdAt(),
   },

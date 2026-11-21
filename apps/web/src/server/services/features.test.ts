@@ -123,12 +123,12 @@ describe("text messages", () => {
     expect(third.status).toBe("return_initiated");
     expect((await msgs(p.id)).map((m) => m.kind)).toEqual(["out_for_delivery", "attempt_failed", "out_for_delivery", "attempt_failed", "out_for_delivery"]);
 
-    await setSmsSettings(db, { enabled: { out_for_delivery: false, attempt_failed: true, delivered: true } });
+    await setSmsSettings(db, { enabled: { confirm_order: true, ready_at_desk: true, out_for_delivery: false, attempt_failed: true, delivered: true } });
     const q = await order();
     await out(q.id);
     await transition(db, { parcelId: q.id, to: "delivered", actor: courier });
     expect((await msgs(q.id)).map((m) => m.kind)).toEqual(["delivered"]);
-    await setSmsSettings(db, (await getSmsSettings(db)) && { enabled: { out_for_delivery: true, attempt_failed: true, delivered: false } });
+    await setSmsSettings(db, (await getSmsSettings(db)) && { enabled: { confirm_order: true, ready_at_desk: true, out_for_delivery: true, attempt_failed: true, delivered: false } });
   });
 
   it("keeps French messages in one GSM part and counts Arabic parts", () => {

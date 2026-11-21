@@ -27,14 +27,19 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
   final _cod = TextEditingController();
   final _weight = TextEditingController(text: '1');
   final _contents = TextEditingController();
+  final _exchangeNote = TextEditingController();
   int? _wilaya;
   Commune? _commune;
+  String _type = 'home';
+  String? _desk;
+  bool _partial = false;
+  bool _exchange = false;
   String _lang = 'fr';
   bool _busy = false;
 
   @override
   void dispose() {
-    for (final c in [_name, _phone, _address, _cod, _weight, _contents]) {
+    for (final c in [_name, _phone, _address, _cod, _weight, _contents, _exchangeNote]) {
       c.dispose();
     }
     super.dispose();
@@ -49,8 +54,13 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
         'recipientPhone': _phone.text.trim(),
         'recipientLang': _lang,
         'destWilayaId': _wilaya,
-        'communeId': _commune!.id,
-        'address': _address.text.trim(),
+        'deliveryType': _type,
+        if (_type == 'home') 'communeId': _commune!.id,
+        if (_type == 'home') 'address': _address.text.trim(),
+        if (_type == 'desk') 'stopDeskId': _desk,
+        if (_partial) 'allowPartial': true,
+        if (_exchange) 'exchange': true,
+        if (_exchange) 'exchangeNote': _exchangeNote.text.trim(),
         if (_contents.text.trim().isNotEmpty) 'description': _contents.text.trim(),
         'weightKg': double.tryParse(_weight.text.replaceAll(',', '.')) ?? 1,
         'codAmount': int.tryParse(_cod.text.replaceAll(RegExp(r'\D'), '')) ?? 0,
@@ -84,7 +94,9 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
   @override
   Widget build(BuildContext context) {
     final wilayas = ref.watch(wilayasProvider);
-    final communes = _wilaya == null ? null : ref.watch(communesProvider(_wilaya!));
+    final communes = _wilaya == null || _type == 'desk' ? null : ref.watch(communesProvider(_wilaya!));
+    final desks = _wilaya == null ? null : ref.watch(desksProvider(_wilaya!));
+    final hasDesk = desks?.valueOrNull?.isNotEmpty ?? false;
     return Scaffold(
       appBar: AppBar(title: Text(tr('New order'))),
       body: Form(
@@ -115,10 +127,36 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
               onChanged: (v) => setState(() {
                 _wilaya = v;
                 _commune = null;
+                _desk = null;
+                _type = 'home';
               }),
               validator: (v) => v == null ? tr('Choose the wilaya') : null,
             ),
           ),
+          if (hasDesk) ...[
+            const SizedBox(height: 10),
+            SegmentedButton<String>(
+              segments: [ButtonSegment(value: 'home', label: Text(tr('To the door'))), ButtonSegment(value: 'desk', label: Text(tr('Stop desk')))],
+              selected: {_type},
+              onSelectionChanged: (s) => setState(() => _type = s.first),
+            ),
+          ],
+          if (_type == 'desk' && desks != null) ...[
+            const SizedBox(height: 10),
+            desks.when(
+              loading: () => const LinearProgressIndicator(),
+              error: (e, _) => ErrorRetry(error: e, onRetry: () => ref.invalidate(desksProvider(_wilaya!))),
+              data: (list) => DropdownButtonFormField<String>(
+                key: ValueKey('desk$_wilaya'),
+                initialValue: _desk,
+                isExpanded: true,
+                decoration: InputDecoration(labelText: tr('Stop desk'), helperText: tr('Cheaper. The recipient collects it with a code.')),
+                items: [for (final d in list) DropdownMenuItem(value: d.id, child: Text(d.commune != null ? '${d.name} · ${d.commune}' : d.name))],
+                onChanged: (v) => setState(() => _desk = v),
+                validator: (v) => v == null ? tr('Choose the stop desk') : null,
+              ),
+            ),
+          ],
           const SizedBox(height: 10),
           if (communes != null)
             communes.when(
@@ -135,7 +173,8 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
               ),
             ),
           const SizedBox(height: 10),
-          TextFormField(controller: _address, maxLines: 2, decoration: InputDecoration(labelText: tr('Address')), validator: (v) => (v ?? '').trim().length < 4 ? tr('Write the street and building') : null),
+          if (_type == 'home')
+            TextFormField(controller: _address, maxLines: 2, decoration: InputDecoration(labelText: tr('Address')), validator: (v) => (v ?? '').trim().length < 4 ? tr('Write the street and building') : null),
           const SizedBox(height: 14),
           Text(tr('Text messages to the recipient in'), style: const TextStyle(color: MasarColors.ink2)),
           const SizedBox(height: 6),
@@ -156,6 +195,22 @@ class _NewOrderScreenState extends ConsumerState<NewOrderScreen> {
           TextFormField(controller: _weight, keyboardType: const TextInputType.numberWithOptions(decimal: true), decoration: InputDecoration(labelText: tr('Weight (kg)'))),
           const SizedBox(height: 10),
           TextFormField(controller: _contents, maxLength: 120, decoration: InputDecoration(labelText: tr('Contents (optional)'))),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _partial,
+            onChanged: (v) => setState(() => _partial = v),
+            title: Text(tr('Allow partial delivery')),
+            subtitle: Text(tr('The recipient may keep only some items and pay for those.')),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: _exchange,
+            onChanged: (v) => setState(() => _exchange = v),
+            title: Text(tr('Exchange')),
+            subtitle: Text(tr('The courier takes an item back from the recipient.')),
+          ),
+          if (_exchange)
+            TextFormField(controller: _exchangeNote, maxLength: 200, decoration: InputDecoration(labelText: tr('Item to collect')), validator: _required),
           const SizedBox(height: 8),
           FilledButton(
             onPressed: _busy ? null : _submit,

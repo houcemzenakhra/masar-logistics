@@ -8,6 +8,7 @@ export const STATUSES = [
   "in_transit",
   "at_destination_hub",
   "out_for_delivery",
+  "ready_for_pickup",
   "delivered",
   "attempt_failed",
   "return_initiated",
@@ -29,6 +30,7 @@ export const STATUS_LABEL: Record<Status, string> = {
   in_transit: "In transit",
   at_destination_hub: "At destination hub",
   out_for_delivery: "Out for delivery",
+  ready_for_pickup: "Ready at stop desk",
   delivered: "Delivered",
   attempt_failed: "Attempt failed",
   return_initiated: "Return initiated",
@@ -47,6 +49,7 @@ export const STATUS_TONE: Record<Status, Tone> = {
   in_transit: "progress",
   at_destination_hub: "progress",
   out_for_delivery: "info",
+  ready_for_pickup: "info",
   delivered: "success",
   attempt_failed: "warn",
   return_initiated: "warn",
@@ -60,9 +63,10 @@ const T: Partial<Record<Status, Partial<Record<Status, Role[]>>>> = {
   created: { pickup_assigned: ["admin"], cancelled: ["admin", "merchant"] },
   pickup_assigned: { picked_up: ["courier", "admin"], created: ["admin"], cancelled: ["admin"] },
   picked_up: { at_origin_hub: ["hub", "admin"] },
-  at_origin_hub: { in_transit: ["hub", "admin"], out_for_delivery: ["admin", "hub"] },
+  at_origin_hub: { in_transit: ["hub", "admin"], out_for_delivery: ["admin", "hub"], ready_for_pickup: ["hub", "admin"] },
   in_transit: { at_destination_hub: ["hub", "admin"] },
-  at_destination_hub: { out_for_delivery: ["admin", "hub"] },
+  at_destination_hub: { out_for_delivery: ["admin", "hub"], ready_for_pickup: ["hub", "admin"] },
+  ready_for_pickup: { delivered: ["hub", "admin"], return_initiated: ["hub", "admin"] },
   out_for_delivery: { delivered: ["courier", "admin"], attempt_failed: ["courier", "admin"] },
   attempt_failed: { out_for_delivery: ["admin", "hub"], return_initiated: ["admin"] },
   return_initiated: { returned: ["hub", "admin"] },
@@ -96,7 +100,7 @@ export const MAIN_PATH: Status[] = [
 
 export function progressIndex(s: Status): number {
   if (s === "pickup_assigned") return 0;
-  if (s === "attempt_failed") return 5;
+  if (s === "attempt_failed" || s === "ready_for_pickup") return 5;
   const i = MAIN_PATH.indexOf(s);
   return i;
 }

@@ -12,6 +12,8 @@ import { MAX_SEND_ATTEMPTS, PARCEL_KINDS, displayTo, getSmsSettings, listSms, pr
 export const metadata = { title: "Text messages" };
 
 const KIND: Record<string, string> = {
+  confirm_order: "Order confirmation",
+  ready_at_desk: "Ready at stop desk",
   out_for_delivery: "Out for delivery",
   attempt_failed: "Delivery failed",
   delivered: "Delivered",
@@ -19,12 +21,14 @@ const KIND: Record<string, string> = {
   test: "Test",
 };
 const WHEN: Record<(typeof PARCEL_KINDS)[number], string> = {
+  confirm_order: "When a merchant who asks for confirmation creates an order",
+  ready_at_desk: "When the parcel is ready to collect at a stop desk",
   out_for_delivery: "When a courier takes the parcel out for delivery",
   attempt_failed: "When a delivery attempt fails and another one will be made",
   delivered: "When the parcel is delivered",
 };
 const STATUS = { queued: ["Queued", "neutral"], sending: ["Sending", "info"], sent: ["Sent", "success"], failed: ["Failed", "danger"], simulated: ["Test mode", "warn"] } as const;
-const SAMPLE = { tracking: "MSR004512907", merchant: "Dar El Moda", merchantPhone: "0550 12 34 56", cod: 4500, courier: "Riad", courierPhone: "0770 11 22 33" };
+const SAMPLE = { tracking: "MSR004512907", merchant: "Dar El Moda", merchantPhone: "0550 12 34 56", cod: 4500, courier: "Riad", courierPhone: "0770 11 22 33", code: "4821", desk: "Masar Bab Ezzouar", deskAddress: "Cité 5 Juillet, Bab Ezzouar", hours: "9:00-18:00", days: 7 };
 
 export default async function Sms({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
   await requireRole("admin");

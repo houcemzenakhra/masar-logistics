@@ -27,6 +27,9 @@ class _DeliverScreenState extends ConsumerState<DeliverScreen> {
   final _proof = DeliveryProof();
   final _code = TextEditingController();
   final _name = TextEditingController();
+  final _collected = TextEditingController();
+  final _returned = TextEditingController();
+  bool _partial = false;
   bool _busy = false;
   String? _error;
 
@@ -34,6 +37,8 @@ class _DeliverScreenState extends ConsumerState<DeliverScreen> {
   void dispose() {
     _code.dispose();
     _name.dispose();
+    _collected.dispose();
+    _returned.dispose();
     super.dispose();
   }
 
@@ -54,6 +59,22 @@ class _DeliverScreenState extends ConsumerState<DeliverScreen> {
     if (widget.proofRequired && !_proof.any) {
       setState(() => _error = tr('Record a proof first: the code, a photo or a signature.'));
       return;
+    }
+    if (_partial) {
+      final amount = int.tryParse(_collected.text.trim());
+      if (amount == null || amount < 0 || amount >= widget.parcel.codAmount) {
+        setState(() => _error = tr('The amount collected must be less than the amount due, and not negative'));
+        return;
+      }
+      if (_returned.text.trim().isEmpty) {
+        setState(() => _error = tr('Say what the recipient did not keep'));
+        return;
+      }
+      _proof
+        ..collected = amount
+        ..returnedItems = _returned.text;
+    } else {
+      _proof.collected = null;
     }
     setState(() {
       _busy = true;
@@ -85,6 +106,42 @@ class _DeliverScreenState extends ConsumerState<DeliverScreen> {
               Ltr(dzd(p.codAmount), style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w700)),
             ]),
           ),
+        if (p.exchange)
+          CardBox(
+            color: MasarColors.infoSoft,
+            child: Row(children: [
+              const Icon(Icons.swap_horiz_rounded, color: MasarColors.info),
+              const SizedBox(width: 12),
+              Expanded(child: Text(tr('Exchange: take back {item}.', {'item': p.exchangeNote}), style: const TextStyle(fontWeight: FontWeight.w600))),
+            ]),
+          ),
+        if (p.allowPartial && p.codAmount > 0) ...[
+          const SizedBox(height: 10),
+          CardBox(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              SwitchListTile(
+                contentPadding: EdgeInsets.zero,
+                value: _partial,
+                onChanged: (v) => setState(() {
+                  _partial = v;
+                  _error = null;
+                }),
+                title: Text(tr('The recipient keeps only part of the order')),
+                subtitle: Text(tr('Allowed by the merchant. The rest goes back with the return fee.')),
+              ),
+              if (_partial) ...[
+                TextField(
+                  controller: _collected,
+                  keyboardType: TextInputType.number,
+                  inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+                  decoration: InputDecoration(labelText: tr('Cash collected (DZD)')),
+                ),
+                const SizedBox(height: 10),
+                TextField(controller: _returned, decoration: InputDecoration(labelText: tr('What comes back'))),
+              ],
+            ]),
+          ),
+        ],
         SectionTitle(widget.proofRequired ? tr('Proof of delivery (required)') : tr('Proof of delivery')),
         CardBox(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -129,7 +186,11 @@ class _DeliverScreenState extends ConsumerState<DeliverScreen> {
             onPressed: _busy ? null : _submit,
             child: _busy
                 ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
-                : Text(p.codAmount > 0 ? tr('Collected {x} · Delivered', {'x': dzd(p.codAmount)}) : tr('Delivered')),
+                : Text(_partial
+                    ? tr('Partial delivery')
+                    : p.codAmount > 0
+                        ? tr('Collected {x} · Delivered', {'x': dzd(p.codAmount)})
+                        : tr('Delivered')),
           ),
         ),
       ),

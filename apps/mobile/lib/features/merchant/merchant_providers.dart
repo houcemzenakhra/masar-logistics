@@ -55,3 +55,9 @@ final payoutsProvider = FutureProvider.autoDispose<Payouts>((ref) async {
     requests: ((r['requests'] as List?) ?? const []).cast<Map<String, dynamic>>(),
   );
 });
+
+/// Open stop desks in a wilaya (empty when there is none).
+final desksProvider = FutureProvider.family<List<Desk>, int>((ref, wilayaId) async {
+  final r = await ref.read(apiProvider).get('/desks', query: {'wilaya': '$wilayaId'});
+  return ((r['desks'] as List?) ?? const []).map((e) => Desk.fromJson(e as Map<String, dynamic>)).toList();
+});

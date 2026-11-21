@@ -193,6 +193,23 @@ class _RunTab extends ConsumerWidget {
                 trailing: TextButton.icon(icon: const Icon(Icons.qr_code_scanner_rounded, size: 18), label: Text(tr('Scan')), onPressed: () => _scanPickup(context, ref, pickups)),
               ),
             for (final p in pickups) Padding(padding: const EdgeInsets.only(bottom: 10), child: _StopTile(p: p, pickup: true)),
+            if (t.returns.isNotEmpty) SectionTitle(tr('To hand in at the hub')),
+            for (final p in t.returns)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: CardBox(
+                  child: Row(children: [
+                    const Icon(Icons.assignment_return_rounded, color: MasarColors.warn),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                        Ltr(p.tracking, style: const TextStyle(fontWeight: FontWeight.w600)),
+                        Text(p.description, maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: MasarColors.ink2, fontSize: 13.5)),
+                      ]),
+                    ),
+                  ]),
+                ),
+              ),
           ]);
         },
       ),
@@ -231,9 +248,11 @@ class _StopTile extends StatelessWidget {
                 Text(pickup ? p.merchantName : p.recipientName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 16)),
                 const SizedBox(height: 2),
                 Text(pickup ? p.tracking : '${p.address}, ${p.place}', maxLines: 2, overflow: TextOverflow.ellipsis, style: const TextStyle(color: MasarColors.ink2, fontSize: 13.5)),
-                if (!pickup && (p.instructions.isNotEmpty || p.preferredDate != null)) ...[
+                if (!pickup && (p.instructions.isNotEmpty || p.preferredDate != null || p.exchange || p.allowPartial)) ...[
                   const SizedBox(height: 6),
                   Wrap(spacing: 6, runSpacing: 4, children: [
+                    if (p.exchange) Pill(tr('Exchange'), color: MasarColors.info),
+                    if (p.allowPartial) Pill(tr('Partial delivery allowed'), color: MasarColors.muted),
                     if (p.instructions.isNotEmpty) Pill(tr('Note from recipient'), color: MasarColors.info),
                     if (p.preferredDate != null) Pill(tr('Asked for {day}', {'day': p.preferredDate!}), color: MasarColors.warn),
                   ]),

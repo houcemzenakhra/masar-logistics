@@ -80,6 +80,17 @@ class Parcel {
     this.currentHub,
     this.rating,
     this.events = const [],
+    this.confirmation = 'none',
+    this.deliveryType = 'home',
+    this.desk,
+    this.deskAddress,
+    this.deskHours,
+    this.allowPartial = false,
+    this.exchange = false,
+    this.exchangeNote = '',
+    this.collectedAmount,
+    this.kind = 'delivery',
+    this.daysWaiting,
   });
 
   final String id;
@@ -113,12 +124,38 @@ class Parcel {
   final int? rating;
   final List<ParcelEvent> events;
 
+  /// none | pending | confirmed | declined: whether the recipient has confirmed the order.
+  final String confirmation;
+
+  /// home | desk: delivered to the door, or collected at a stop desk.
+  final String deliveryType;
+  final String? desk;
+  final String? deskAddress;
+  final String? deskHours;
+
+  /// The recipient may keep part of the order and pay less.
+  final bool allowPartial;
+
+  /// The courier collects [exchangeNote] from the recipient on delivery.
+  final bool exchange;
+  final String exchangeNote;
+  final int? collectedAmount;
+
+  /// delivery | return_leg (goods coming back to the merchant).
+  final String kind;
+
+  /// On a stop desk shelf: days since it was put there.
+  final int? daysWaiting;
+
+  bool get atDesk => deliveryType == 'desk';
+  bool get awaitingConfirmation => confirmation == 'pending' && status == 'created';
+
   /// Names in the app's language: Arabic names for Arabic, the Latin spelling otherwise.
   String get place => I18n.lang == 'ar'
       ? '${communeAr.isNotEmpty ? communeAr : commune}، ${wilayaAr.isNotEmpty ? wilayaAr : wilaya}'
       : '$commune, $wilaya';
 
-  int get merchantNet => codAmount - deliveryFee;
+  int get merchantNet => (collectedAmount ?? codAmount) - deliveryFee;
   bool get hasMapPoint => lat != null && lng != null;
 
   factory Parcel.fromJson(Map<String, dynamic> j) => Parcel(
@@ -152,6 +189,51 @@ class Parcel {
         currentHub: j['currentHub'] as String?,
         rating: (j['rating'] as num?)?.toInt(),
         events: ((j['events'] as List?) ?? const []).map((e) => ParcelEvent.fromJson(e as Map<String, dynamic>)).toList(),
+        confirmation: (j['confirmation'] as String?) ?? 'none',
+        deliveryType: (j['deliveryType'] as String?) ?? 'home',
+        desk: j['desk'] as String?,
+        deskAddress: j['deskAddress'] as String?,
+        deskHours: j['deskHours'] as String?,
+        allowPartial: j['allowPartial'] == true,
+        exchange: j['exchange'] == true,
+        exchangeNote: _str(j['exchangeNote']),
+        collectedAmount: (j['collectedAmount'] as num?)?.toInt(),
+        kind: (j['kind'] as String?) ?? 'delivery',
+        daysWaiting: (j['daysWaiting'] as num?)?.toInt(),
+      );
+}
+
+/// How a recipient's past orders went, across Masar: counts only.
+class RecipientHistory {
+  const RecipientHistory({required this.orders, required this.delivered, required this.refused, required this.returned});
+  final int orders;
+  final int delivered;
+  final int refused;
+  final int returned;
+
+  bool get risky => refused > 0 && refused * 2 >= orders;
+
+  static RecipientHistory? fromJson(Object? v) {
+    if (v is! Map) return null;
+    return RecipientHistory(orders: _int(v['orders']), delivered: _int(v['delivered']), refused: _int(v['refused']), returned: _int(v['returned']));
+  }
+}
+
+/// A stop desk where recipients collect parcels.
+class Desk {
+  const Desk({required this.id, required this.name, required this.address, this.hours = '', this.commune});
+  final String id;
+  final String name;
+  final String address;
+  final String hours;
+  final String? commune;
+
+  factory Desk.fromJson(Map<String, dynamic> j) => Desk(
+        id: j['id'] as String,
+        name: _str(j['name']),
+        address: _str(j['address']),
+        hours: _str(j['hours']),
+        commune: I18n.lang == 'ar' ? (j['communeAr'] as String? ?? j['commune'] as String?) : j['commune'] as String?,
       );
 }
 
@@ -382,6 +464,7 @@ const statusLabels = <String, String>{
   'in_transit': 'In transit',
   'at_destination_hub': 'At destination hub',
   'out_for_delivery': 'Out for delivery',
+  'ready_for_pickup': 'Ready at stop desk',
   'delivered': 'Delivered',
   'attempt_failed': 'Attempt failed',
   'return_initiated': 'Return initiated',

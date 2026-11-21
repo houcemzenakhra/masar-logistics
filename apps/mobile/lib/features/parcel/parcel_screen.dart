@@ -58,9 +58,50 @@ class ParcelScreen extends ConsumerWidget {
                   ]),
                 ]),
               ),
+              if (p.awaitingConfirmation && (merchant || user.role == 'admin')) ...[
+                const SizedBox(height: 12),
+                CardBox(
+                  color: MasarColors.warnSoft,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    Text(tr('Waiting for the recipient to confirm'), style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                    const SizedBox(height: 4),
+                    Text(tr('They got a text message with a link. It is picked up once they confirm. If you called them, answer for them here.'), style: const TextStyle(color: MasarColors.ink2)),
+                    const SizedBox(height: 10),
+                    Row(children: [
+                      Expanded(
+                        child: FilledButton(
+                          onPressed: () async {
+                            final r = await runAction(context, () => ref.read(apiProvider).post('/parcels/${p.id}/confirm', {'answer': 'yes'}), done: tr('Confirmed. The order can be picked up.'));
+                            if (r != null) ref.invalidate(parcelDetailProvider(id));
+                          },
+                          child: Text(tr('Confirmed by phone')),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton(
+                          style: OutlinedButton.styleFrom(foregroundColor: MasarColors.danger),
+                          onPressed: () async {
+                            final r = await runAction(context, () => ref.read(apiProvider).post('/parcels/${p.id}/confirm', {'answer': 'no'}), done: tr('Cancelled. No fees.'));
+                            if (r != null) ref.invalidate(parcelDetailProvider(id));
+                          },
+                          child: Text(tr('Declined')),
+                        ),
+                      ),
+                    ]),
+                  ]),
+                ),
+              ],
               const SizedBox(height: 12),
               CardBox(
                 child: Column(children: [
+                  if (p.atDesk) InfoRow(tr('Stop desk'), p.desk ?? ''),
+                  if (p.atDesk && (p.deskHours ?? '').isNotEmpty) InfoRow(tr('Desk hours'), p.deskHours!),
+                  if (p.exchange) InfoRow(tr('Exchange'), p.exchangeNote),
+                  if (p.allowPartial) InfoRow(tr('Partial delivery'), tr('Allowed')),
+                  for (final l in d.returnLegs) InfoRow(tr('Coming back as'), l.$2, onTap: () => context.push('/parcel/${l.$1}')),
+                  if (d.returnOf != null) InfoRow(tr('Return of'), d.returnOf!.$2, onTap: () => context.push('/parcel/${d.returnOf!.$1}')),
+                  if (p.collectedAmount != null) InfoRow(tr('Collected (partial)'), dzd(p.collectedAmount!)),
                   InfoRow(tr('Cash to collect'), dzd(p.codAmount)),
                   InfoRow(tr('Delivery fee'), dzd(p.deliveryFee)),
                   if (merchant) InfoRow(p.merchantNet >= 0 ? tr('You receive') : tr('You pay'), dzd(p.merchantNet.abs()), valueStyle: const TextStyle(fontWeight: FontWeight.w700, color: MasarColors.ok)),
@@ -89,6 +130,22 @@ class ParcelScreen extends ConsumerWidget {
                     if (p.preferredDate != null && p.status != 'delivered') InfoRow(tr('Recipient asked for'), p.preferredDate!),
                     if (p.instructions.isNotEmpty) InfoRow(tr('Directions from the recipient'), p.instructions),
                     if (p.rating != null) InfoRow(tr('Rating'), '${'★' * p.rating!}${'☆' * (5 - p.rating!)}', valueStyle: const TextStyle(color: MasarColors.warn, fontSize: 16)),
+                  ]),
+                ),
+              ],
+              if (d.history != null) ...[
+                SectionTitle(tr("This recipient's past orders")),
+                CardBox(
+                  color: d.history!.risky ? MasarColors.dangerSoft : null,
+                  child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                    InfoRow(tr('Delivered'), '${d.history!.delivered} / ${d.history!.orders}'),
+                    InfoRow(tr('Refused at the door'), '${d.history!.refused}'),
+                    InfoRow(tr('Returned'), '${d.history!.returned}'),
+                    const SizedBox(height: 6),
+                    Text(
+                      d.history!.risky ? tr('Often refuses parcels. Consider calling before shipping.') : tr('Across Masar, last 12 months. Counts only: no names or shops are shared.'),
+                      style: TextStyle(fontSize: 13, color: d.history!.risky ? MasarColors.danger : MasarColors.muted),
+                    ),
                   ]),
                 ),
               ],

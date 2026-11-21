@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { hashPassword } from "../auth";
 import type { Q } from "../db";
 import { hubs, parcels, users } from "../schema";
@@ -15,13 +15,14 @@ export const algeriaToday = (d = new Date()) => new Intl.DateTimeFormat("en-CA",
  */
 export async function waiting(q: Q, mode: "pickup" | "delivery") {
   if (mode === "pickup") {
-    return q.select({ id: parcels.id, hubId: parcels.originHubId }).from(parcels).where(eq(parcels.status, "created"));
+    // An order waiting for the recipient's confirmation is not picked up yet.
+    return q.select({ id: parcels.id, hubId: parcels.originHubId }).from(parcels).where(and(eq(parcels.status, "created"), ne(parcels.confirmation, "pending")));
   }
   return q
     .select({ id: parcels.id, hubId: parcels.destHubId })
     .from(parcels)
     .where(
-      sql`(${parcels.status} in ('at_destination_hub', 'attempt_failed') or (${parcels.status} = 'at_origin_hub' and ${parcels.originHubId} = ${parcels.destHubId} and ${parcels.bagId} is null)) and (${parcels.preferredDate} is null or ${parcels.preferredDate} <= ${algeriaToday()})`,
+      sql`(${parcels.status} in ('at_destination_hub', 'attempt_failed') or (${parcels.status} = 'at_origin_hub' and ${parcels.originHubId} = ${parcels.destHubId} and ${parcels.bagId} is null)) and ${parcels.deliveryType} = 'home' and (${parcels.preferredDate} is null or ${parcels.preferredDate} <= ${algeriaToday()})`,
     );
 }
 

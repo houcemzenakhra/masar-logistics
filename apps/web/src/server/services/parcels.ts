@@ -3,8 +3,10 @@ import { alias } from "drizzle-orm/pg-core";
 import type { Session } from "../auth";
 import type { Q } from "../db";
 import { quote, tierFor, type Tier } from "../domain/pricing";
+import { normalizeMobile } from "../phone";
 import { MAX_ATTEMPTS, canTransition, type Status } from "../domain/state";
-import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, users, wilayas } from "../schema";
+import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, stopDesks, users, wilayas } from "../schema";
+import { deskFee, getDeskSettings } from "./desks";
 import { acct, post } from "./ledger";
 import { FAIL_REASONS, REASON_TEXT, merchantUsers, notify, type FailReason } from "./notify";
 import { queueParcelSms } from "./sms";
@@ -57,6 +59,19 @@ const view = {
   instructions: parcels.instructions,
   rating: parcels.rating,
   ratingComment: parcels.ratingComment,
+  confirmation: parcels.confirmation,
+  confirmedAt: parcels.confirmedAt,
+  deliveryType: parcels.deliveryType,
+  stopDeskId: parcels.stopDeskId,
+  desk: stopDesks.name,
+  deskAddress: stopDesks.address,
+  deskHours: stopDesks.hours,
+  allowPartial: parcels.allowPartial,
+  exchange: parcels.exchange,
+  exchangeNote: parcels.exchangeNote,
+  collectedAmount: parcels.collectedAmount,
+  kind: parcels.kind,
+  parentId: parcels.parentId,
   createdAt: parcels.createdAt,
   updatedAt: parcels.updatedAt,
   deliveredAt: parcels.deliveredAt,
@@ -71,7 +86,8 @@ function baseQuery(q: Q) {
     .innerJoin(destHub, eq(parcels.destHubId, destHub.id))
     .leftJoin(destCommune, eq(parcels.communeId, destCommune.id))
     .leftJoin(currentHub, eq(parcels.currentHubId, currentHub.id))
-    .leftJoin(users, eq(parcels.courierId, users.id));
+    .leftJoin(users, eq(parcels.courierId, users.id))
+    .leftJoin(stopDesks, eq(parcels.stopDeskId, stopDesks.id));
 }
 
 export type ParcelView = Awaited<ReturnType<typeof listParcels>>[number];
@@ -87,6 +103,8 @@ export async function listParcels(
     /** Parcels on a hub's floor that could go into a bag for this route. */
     baggable?: { originHubId: string; destHubId: string };
     status?: Status | Status[];
+    /** Stop desk parcels of one hub, for its desk counter. */
+    deskHubId?: string;
     search?: string;
     limit?: number;
   } = {},
@@ -99,6 +117,7 @@ export async function listParcels(
   if (f.baggable) {
     where.push(eq(parcels.status, "at_origin_hub"), eq(parcels.currentHubId, f.baggable.originHubId), eq(parcels.destHubId, f.baggable.destHubId), sql`${parcels.bagId} is null`);
   }
+  if (f.deskHubId) where.push(eq(parcels.deliveryType, "desk"), eq(parcels.destHubId, f.deskHubId));
   if (f.status) where.push(Array.isArray(f.status) ? inArray(parcels.status, f.status) : eq(parcels.status, f.status));
   if (f.search?.trim()) {
     const s = `%${f.search.trim()}%`;
@@ -159,6 +178,14 @@ export type NewParcel = {
   description?: string;
   weightKg: number;
   codAmount: number;
+  /** `desk`: the recipient collects it at `stopDeskId`. Default: delivered to the door. */
+  deliveryType?: "home" | "desk";
+  stopDeskId?: string;
+  /** The recipient may keep part of the order and pay less. */
+  allowPartial?: boolean;
+  /** The courier collects an item on delivery; `exchangeNote` says which. */
+  exchange?: boolean;
+  exchangeNote?: string;
 };
 
 export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = new Date()) {
@@ -170,6 +197,18 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
     if (m.status === "pending") throw new DomainError("Your account is waiting for approval. You can create orders once it is approved.");
     if (m.status === "suspended") throw new DomainError("This merchant account is suspended");
     let commune = input.commune?.trim() ?? "";
+    let address = input.address;
+    let desk: typeof stopDesks.$inferSelect | undefined;
+    if (input.deliveryType === "desk") {
+      if (!input.stopDeskId) throw new DomainError("Choose the stop desk");
+      [desk] = await tx.select().from(stopDesks).where(eq(stopDesks.id, input.stopDeskId));
+      if (!desk || !desk.active) throw new DomainError("That stop desk is not open");
+      if (desk.wilayaId !== input.destWilayaId) throw new DomainError("That stop desk is not in the chosen wilaya");
+      address = `${desk.name}, ${desk.address}`;
+      if (desk.communeId) input = { ...input, communeId: desk.communeId };
+      else commune = commune || desk.address;
+    }
+    if (input.exchange && !input.exchangeNote?.trim()) throw new DomainError("Say which item the courier collects in exchange");
     if (input.communeId) {
       const [c] = await tx.select().from(communes).where(eq(communes.id, input.communeId));
       if (!c || c.wilayaId !== input.destWilayaId) throw new DomainError("That commune is not in the chosen wilaya");
@@ -182,23 +221,33 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
     if (!origin || !dest) throw new DomainError("Unknown wilaya");
     const [tier] = await tx.select().from(rateTiers).where(eq(rateTiers.key, tierFor(origin, dest)));
     const price = quote(tier, input.weightKg);
+    const fee = desk ? deskFee(price.deliveryFee, await getDeskSettings(tx)) : price.deliveryFee;
     const [p] = await tx
       .insert(parcels)
       .values({
         ...input,
+        recipientPhone: normalizeMobile(input.recipientPhone) ?? input.recipientPhone.trim(),
+        address,
         commune,
+        deliveryType: desk ? "desk" : "home",
+        stopDeskId: desk?.id ?? null,
+        allowPartial: input.allowPartial ?? false,
+        exchange: input.exchange ?? false,
+        exchangeNote: input.exchange ? input.exchangeNote!.trim().slice(0, 200) : "",
+        confirmation: m.confirmOrders ? "pending" : "none",
         description: input.description ?? "",
         tracking: newTracking(),
         originWilayaId: origin.id,
-        deliveryFee: price.deliveryFee,
+        deliveryFee: fee,
         returnFee: price.returnFee,
         originHubId: origin.hubId,
-        destHubId: dest.hubId,
+        destHubId: desk?.hubId ?? dest.hubId,
         createdAt: at,
         updatedAt: at,
       })
       .returning();
     await tx.insert(parcelEvents).values({ parcelId: p.id, status: "created", actorId: actor.userId, note: "Order created", createdAt: at });
+    if (p.confirmation === "pending") await queueParcelSms(tx, p.id, "confirm_order");
     return p;
   });
 }
@@ -220,6 +269,10 @@ export type TransitionInput = {
   reason?: FailReason;
   /** With reason `reschedule`: the day the recipient asked for, YYYY-MM-DD. */
   preferredDate?: string;
+  /** On delivery: cash actually taken, when the recipient kept only part of the order. */
+  collected?: number;
+  /** On a partial delivery: what comes back, for the merchant. */
+  returnedItems?: string;
 };
 
 export { FAIL_REASONS, type FailReason };
@@ -265,6 +318,23 @@ export async function transition(db: Q, input: TransitionInput) {
       if (!c || !c.active) throw new DomainError("Unknown courier");
       patch.courierId = c.id;
     }
+    if (to === "pickup_assigned" && p.confirmation === "pending") {
+      throw new DomainError(`${p.tracking} is waiting for the recipient to confirm the order`);
+    }
+    if (to === "out_for_delivery" && p.deliveryType === "desk") {
+      throw new DomainError(`${p.tracking} is collected at a stop desk: put it on the desk shelf instead`);
+    }
+    if (to === "ready_for_pickup") {
+      if (p.deliveryType !== "desk") throw new DomainError(`${p.tracking} is a home delivery, not a stop desk parcel`);
+      if (from === "at_origin_hub" && p.originHubId !== p.destHubId) throw new DomainError("This parcel must travel to its destination hub first");
+      if (actor.role === "hub" && actor.hubId !== p.destHubId) throw new DomainError("This parcel's stop desk belongs to another hub");
+      hubId = p.destHubId;
+      patch.currentHubId = p.destHubId;
+      patch.courierId = null;
+    }
+    if (from === "ready_for_pickup" && actor.role === "hub" && actor.hubId !== p.destHubId) {
+      throw new DomainError("This parcel is at another hub's stop desk");
+    }
     if (to === "out_for_delivery" && from === "at_origin_hub" && p.originHubId !== p.destHubId) {
       throw new DomainError("This parcel must travel to its destination hub first");
     }
@@ -300,18 +370,28 @@ export async function transition(db: Q, input: TransitionInput) {
       }
     }
     if (to === "returned") patch.courierId = null;
+    let partial = false;
     if (to === "delivered") {
       patch.deliveredAt = at;
       patch.attempts = p.attempts + 1;
-      // Courier now holds the cash; the merchant is owed it minus the delivery fee.
+      const collected = input.collected ?? p.codAmount;
+      if (collected !== p.codAmount) {
+        if (!p.allowPartial) throw new DomainError("The merchant did not allow partial delivery for this order: collect the full amount, or record a failed attempt");
+        if (!Number.isInteger(collected) || collected < 0 || collected >= p.codAmount) throw new DomainError("The amount collected must be less than the amount due, and not negative");
+        if (!input.returnedItems?.trim()) throw new DomainError("Say what the recipient did not keep");
+        partial = true;
+        patch.collectedAmount = collected;
+      }
+      // Whoever handed the parcel over now holds the cash: the courier, or the hub's stop desk
+      // (company cash). The merchant is owed it minus the delivery fee.
       await post(tx, {
         kind: "delivery",
         parcelId: p.id,
-        memo: `Delivered ${p.tracking}`,
+        memo: partial ? `Delivered in part ${p.tracking}` : `Delivered ${p.tracking}`,
         createdBy: actor.userId,
         lines: [
-          { account: acct.courier(p.courierId ?? actor.userId), amount: p.codAmount },
-          { account: acct.merchant(p.merchantId), amount: -(p.codAmount - p.deliveryFee) },
+          { account: from === "ready_for_pickup" ? acct.companyCash : acct.courier(p.courierId ?? actor.userId), amount: collected },
+          { account: acct.merchant(p.merchantId), amount: -(collected - p.deliveryFee) },
           { account: acct.revenueDelivery, amount: -p.deliveryFee },
         ],
       });
@@ -329,7 +409,7 @@ export async function transition(db: Q, input: TransitionInput) {
       });
     }
 
-    const reasonText = to === "attempt_failed" ? REASON_TEXT[input.reason ?? "other"].en : "";
+    const reasonText = to === "attempt_failed" ? REASON_TEXT[input.reason ?? "other"].en : partial ? `Kept part, paid ${patch.collectedAmount} DZD. Not kept: ${input.returnedItems!.trim()}` : "";
     await tx.insert(parcelEvents).values({
       parcelId: p.id,
       status: to,
@@ -355,9 +435,16 @@ export async function transition(db: Q, input: TransitionInput) {
 
     const [updated] = await tx.update(parcels).set(patch).where(eq(parcels.id, p.id)).returning();
 
+    // What the recipient did not keep, or the item taken in exchange, goes back to the merchant.
+    let leg: typeof parcels.$inferSelect | null = null;
+    if (to === "delivered" && (partial || p.exchange) && p.kind === "delivery") {
+      leg = await createReturnLeg(tx, p, partial ? `Not kept from ${p.tracking}: ${input.returnedItems!.trim()}` : `Exchange from ${p.tracking}: ${p.exchangeNote}`, from === "ready_for_pickup" ? null : p.courierId, actor, at);
+    }
+
     // Text the recipient. Queued in this transaction, sent after the response.
     if (to === "out_for_delivery") await queueParcelSms(tx, p.id, "out_for_delivery");
     if (to === "delivered") await queueParcelSms(tx, p.id, "delivered");
+    if (to === "ready_for_pickup") await queueParcelSms(tx, p.id, "ready_at_desk");
     // When the parcel is going back to the merchant, the recipient is not told "we will come back".
     if (to === "attempt_failed" && updated.status === "attempt_failed") await queueParcelSms(tx, p.id, "attempt_failed");
 
@@ -366,7 +453,9 @@ export async function transition(db: Q, input: TransitionInput) {
     const data = { parcelId: p.id };
     if (to === "delivered" || to === "attempt_failed" || to === "returned" || updated.status === "return_initiated") {
       const people = await merchantUsers(tx, p.merchantId);
-      if (to === "delivered") await notify(tx, people, "delivered", { ...vars, amount: p.codAmount - p.deliveryFee }, data, `${p.id}:delivered`);
+      if (to === "delivered" && partial) await notify(tx, people, "partial", { ...vars, amount: patch.collectedAmount!, leg: leg!.tracking }, data, `${p.id}:delivered`);
+      else if (to === "delivered") await notify(tx, people, "delivered", { ...vars, amount: p.codAmount - p.deliveryFee }, data, `${p.id}:delivered`);
+      if (to === "delivered" && leg && !partial) await notify(tx, people, "exchange_back", { ...vars, leg: leg.tracking }, { parcelId: leg.id }, `${p.id}:exchange`);
       else if (to === "returned") await notify(tx, people, "returned", { ...vars, fee: p.returnFee }, data, `${p.id}:returned`);
       else if (updated.status === "return_initiated") {
         const why = refused ? REASON_TEXT.refused : { en: `${MAX_ATTEMPTS} failed attempts`, fr: `${MAX_ATTEMPTS} tentatives échouées`, ar: `${MAX_ATTEMPTS} محاولات فاشلة` };
@@ -375,6 +464,44 @@ export async function transition(db: Q, input: TransitionInput) {
     }
     return updated;
   });
+}
+
+/**
+ * Goods coming back to the merchant after a partial delivery or an exchange: a parcel of its own,
+ * already on its way back, so it is scanned, tracked and charged (the return fee) like any return.
+ */
+async function createReturnLeg(tx: Q, p: typeof parcels.$inferSelect, what: string, courierId: string | null, actor: Actor, at: Date) {
+  const [m] = await tx.select().from(merchants).where(eq(merchants.id, p.merchantId));
+  const [w] = await tx.select().from(wilayas).where(eq(wilayas.id, m.wilayaId));
+  const [leg] = await tx
+    .insert(parcels)
+    .values({
+      tracking: newTracking(),
+      merchantId: p.merchantId,
+      kind: "return_leg",
+      parentId: p.id,
+      recipientName: m.name,
+      recipientPhone: m.phone,
+      originWilayaId: p.destWilayaId,
+      destWilayaId: m.wilayaId,
+      commune: w.name,
+      address: m.address || w.name,
+      description: what.slice(0, 300),
+      weightKg: 1,
+      codAmount: 0,
+      deliveryFee: 0,
+      returnFee: p.returnFee,
+      status: "return_initiated",
+      originHubId: p.destHubId,
+      destHubId: p.originHubId,
+      currentHubId: courierId ? null : p.destHubId,
+      courierId,
+      createdAt: at,
+      updatedAt: at,
+    })
+    .returning();
+  await tx.insert(parcelEvents).values({ parcelId: leg.id, status: "return_initiated", note: what.slice(0, 300), actorId: actor.userId, hubId: courierId ? null : p.destHubId, createdAt: at });
+  return leg;
 }
 
 /** What a hub scan means depends on where the parcel is. */

@@ -46,6 +46,7 @@ Color statusColor(String status) {
     case 'pickup_assigned':
     case 'picked_up':
     case 'out_for_delivery':
+    case 'ready_for_pickup':
       return MasarColors.info;
     default:
       return MasarColors.muted;
@@ -145,20 +146,32 @@ class SectionTitle extends StatelessWidget {
 }
 
 class InfoRow extends StatelessWidget {
-  const InfoRow(this.label, this.value, {super.key, this.valueStyle});
+  const InfoRow(this.label, this.value, {super.key, this.valueStyle, this.onTap});
   final String label;
   final String value;
   final TextStyle? valueStyle;
 
+  /// Makes the value a link, e.g. to a related parcel.
+  final VoidCallback? onTap;
+
   @override
-  Widget build(BuildContext context) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 9),
-        child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(label, style: const TextStyle(color: MasarColors.muted, fontSize: 14)),
-          const SizedBox(width: 16),
-          Expanded(child: Text(value, textAlign: TextAlign.end, style: valueStyle ?? const TextStyle(fontWeight: FontWeight.w500, fontSize: 14))),
-        ]),
-      );
+  Widget build(BuildContext context) {
+    final row = Padding(
+      padding: const EdgeInsets.symmetric(vertical: 9),
+      child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        Text(label, style: const TextStyle(color: MasarColors.muted, fontSize: 14)),
+        const SizedBox(width: 16),
+        Expanded(
+          child: Text(
+            value,
+            textAlign: TextAlign.end,
+            style: valueStyle ?? TextStyle(fontWeight: FontWeight.w500, fontSize: 14, color: onTap != null ? MasarColors.accent : null),
+          ),
+        ),
+      ]),
+    );
+    return onTap == null ? row : InkWell(onTap: onTap, child: row);
+  }
 }
 
 /// A number card, e.g. "12 to deliver".

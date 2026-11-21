@@ -1,5 +1,5 @@
-import { CalendarDays, MapPin, MessageSquareText, PackageSearch, ShieldCheck } from "lucide-react";
-import { recipientInstructionsAction, recipientRateAction, recipientRescheduleAction, recipientVerifyAction } from "@/app/actions";
+import { CalendarDays, MapPin, MessageSquareText, PackageSearch, ShieldCheck, Store } from "lucide-react";
+import { recipientConfirmAction, recipientInstructionsAction, recipientRateAction, recipientRescheduleAction, recipientVerifyAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
 import { StarInput } from "@/components/star-input";
 import { TrackLive } from "@/components/track-live";
@@ -58,6 +58,21 @@ export default async function Track({ params }: { params: Promise<{ tracking: st
                   <p className="mt-1 font-medium">{ago(p.updatedAt)}</p>
                 </div>
               </div>
+              {p.deliveryType === "desk" && p.desk && !isTerminal(p.status as Status) && (
+                <div className="mt-5 flex gap-3 rounded-xl bg-paper px-4 py-3 text-sm ring-1 ring-inset ring-line">
+                  <Store size={18} className="mt-0.5 shrink-0 text-accent" />
+                  <div>
+                    <p className="font-medium">{p.status === "ready_for_pickup" ? t("Ready to collect at {desk}", { desk: p.desk }) : t("To collect at {desk}", { desk: p.desk })}</p>
+                    <p dir="auto" className="text-ink-2">{p.deskAddress}</p>
+                    {p.deskHours && <p dir="auto" className="text-ink-2">{p.deskHours}</p>}
+                    {p.status === "ready_for_pickup" && (
+                      <p className="mt-1 text-ink-2">
+                        {p.codAmount > 0 ? t("Bring the code from your text message and {x} DZD.", { x: money(p.codAmount) }) : t("Bring the code from your text message.")}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
               {p.status === "out_for_delivery" && p.codAmount > 0 && (
                 <p className="mt-5 rounded-xl bg-accent-soft px-4 py-3 text-sm font-medium text-accent-deep">
                   {t("Please have {x} DZD ready for the courier.", { x: money(p.codAmount) })}
@@ -83,7 +98,9 @@ type P = NonNullable<Awaited<ReturnType<typeof getParcel>>>;
 
 /** Recipient self-service: unlocked with the last four digits of the phone number on the parcel. */
 function Manage({ p, unlocked }: { p: P; unlocked: boolean }) {
-  const open = !isTerminal(p.status as Status) && p.status !== "return_initiated";
+  const confirm = p.confirmation === "pending" && p.status === "created";
+  // Another day and directions are for a courier coming to the door.
+  const open = !isTerminal(p.status as Status) && p.status !== "return_initiated" && p.deliveryType === "home" && !confirm;
   const canRate = p.status === "delivered" && p.rating == null;
   if (p.status === "delivered" && p.rating != null && unlocked) {
     return (
@@ -93,17 +110,47 @@ function Manage({ p, unlocked }: { p: P; unlocked: boolean }) {
       </Card>
     );
   }
-  if (!open && !canRate) return null;
+  if (!open && !canRate && !confirm) return null;
   if (!unlocked) {
     return (
-      <Card className="p-5 sm:p-6">
-        <h2 className="flex items-center gap-2 text-[15px] font-semibold"><ShieldCheck size={17} className="text-accent" />{open ? t("Is this parcel for you?") : t("How was your delivery?")}</h2>
-        <p className="mt-1 text-sm text-ink-2">{open ? t("Choose another day or leave directions for the courier. First confirm the last four digits of your phone number.") : t("Rate the delivery. First confirm the last four digits of your phone number.")}</p>
+      <Card className={`p-5 sm:p-6 ${confirm ? "ring-2 ring-accent/40" : ""}`}>
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold"><ShieldCheck size={17} className="text-accent" />{confirm ? t("Confirm your order from {shop}", { shop: p.merchantName }) : open ? t("Is this parcel for you?") : t("How was your delivery?")}</h2>
+        <p className="mt-1 text-sm text-ink-2">
+          {confirm
+            ? t("It is shipped once you confirm. First enter the last four digits of your phone number.")
+            : open
+              ? t("Choose another day or leave directions for the courier. First confirm the last four digits of your phone number.")
+              : t("Rate the delivery. First confirm the last four digits of your phone number.")}
+        </p>
         <ActionForm action={recipientVerifyAction} className="mt-4 flex flex-wrap gap-2">
           <input type="hidden" name="tracking" value={p.tracking} />
           <Input name="last4" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" required placeholder="1234" aria-label={t("Last four digits of your phone number")} className="!w-32 tnum" />
           <Submit variant="dark">{t("Confirm")}</Submit>
         </ActionForm>
+      </Card>
+    );
+  }
+  if (confirm) {
+    return (
+      <Card className="p-5 sm:p-6 ring-2 ring-accent/40">
+        <h2 className="text-[15px] font-semibold">{t("Confirm your order from {shop}", { shop: p.merchantName })}</h2>
+        <dl className="mt-3 grid gap-1 text-sm">
+          {p.description && <div className="flex gap-2"><dt className="text-muted">{t("Contents")}:</dt><dd dir="auto">{p.description}</dd></div>}
+          <div className="flex gap-2"><dt className="text-muted">{t("To pay on delivery")}:</dt><dd className="font-medium">{money(p.codAmount)} {t("DZD")}</dd></div>
+          <div className="flex gap-2"><dt className="text-muted">{t("Delivery")}:</dt><dd>{p.deliveryType === "desk" ? t("Stop desk: {name}", { name: p.desk ?? "" }) : p.address}</dd></div>
+        </dl>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <ActionForm action={recipientConfirmAction}>
+            <input type="hidden" name="tracking" value={p.tracking} />
+            <input type="hidden" name="answer" value="yes" />
+            <Submit>{t("Yes, send it")}</Submit>
+          </ActionForm>
+          <ActionForm action={recipientConfirmAction}>
+            <input type="hidden" name="tracking" value={p.tracking} />
+            <input type="hidden" name="answer" value="no" />
+            <Submit variant="ghost">{t("No, cancel the order")}</Submit>
+          </ActionForm>
+        </div>
       </Card>
     );
   }
