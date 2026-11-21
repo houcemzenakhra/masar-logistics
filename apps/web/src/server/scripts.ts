@@ -31,7 +31,14 @@ async function main() {
   else if (cmd === "seed") {
     const created = await seedProduction(db, { email: need("ADMIN_EMAIL"), password: need("ADMIN_PASSWORD", 12) });
     console.log(created ? "First operations account created." : "Accounts already exist: none created.");
-  } else if (cmd === "seed-demo") await seed(db, need("MASAR_DEMO_PASSWORD", 12));
+  } else if (cmd === "seed-demo") {
+    const pw = process.env.MASAR_DEMO_PASSWORD ?? "";
+    // Without a password, a database that already has accounts is left as it is, so a missing
+    // setting does not block a deploy. An empty database still needs the password.
+    const [{ n }] = (await pool.query("select count(*)::int as n from users")).rows;
+    if (pw.length < 12 && n > 0) console.warn("MASAR_DEMO_PASSWORD is not set: demo data left as it is.");
+    else await seed(db, need("MASAR_DEMO_PASSWORD", 12));
+  }
   else throw new Error("Usage: scripts.ts migrate | seed | seed-demo");
   await pool.end();
   console.log(`${cmd}: done`);
