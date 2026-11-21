@@ -7,7 +7,9 @@ import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers } from "@/server/services/directory";
-import { algeriaToday } from "@/server/services/dispatch";
+import { dayName } from "@/lib/format";
+import { algeriaToday, waiting } from "@/server/services/dispatch";
+import { bookedForDay } from "@/server/services/pickups";
 import { listParcels, type ParcelView } from "@/server/services/parcels";
 
 type C = { id: string; name: string; active: number; hub: string | null };
@@ -40,23 +42,49 @@ function Board({ title, hint, mode, rows, couriers }: { title: string; hint: str
 export default async function Dispatch() {
   await requireRole("admin", "hub");
   const db = await getDb();
-  const [pickups, atHub, all] = await Promise.all([
+  const today = algeriaToday();
+  const [created, due, atHub, all, booked] = await Promise.all([
     listParcels(db, { status: "created" }),
+    waiting(db, "pickup"),
     listParcels(db, { status: ["at_destination_hub", "at_origin_hub", "attempt_failed"] }),
     listCouriers(db),
+    bookedForDay(db, today),
   ]);
+  // Orders waiting for the recipient's yes, or for the merchant's pickup day, are not offered.
+  const dueIds = new Set(due.map((d) => d.id));
+  const pickups = created.filter((p) => dueIds.has(p.id));
+  const held = created.length - pickups.length;
   const couriers = all.filter((c) => c.isActive);
   // At the origin hub a parcel is only deliverable when that hub is also its destination hub.
-  const deliverable = atHub.filter((p) => p.status !== "at_origin_hub" || (p.originHubId === p.destHubId && !p.bagId));
+  // Stop desk parcels go on the desk shelf instead (Stop desks page).
+  const deliverable = atHub.filter((p) => p.deliveryType === "home" && (p.status !== "at_origin_hub" || (p.originHubId === p.destHubId && !p.bagId)));
   // Recipients can ask for a later day on the tracking page; those parcels wait, and auto-assign skips them.
-  const today = algeriaToday();
   const deliveries = deliverable.filter((p) => !p.preferredDate || p.preferredDate <= today);
   const later = deliverable.filter((p) => p.preferredDate && p.preferredDate > today);
   return (
     <>
       <PageHeader title={t("Dispatch")} subtitle={t("Tick parcels and choose a courier, or let Masar share the work among the couriers of each hub. Delivery routes are planned as soon as parcels are assigned.")} />
       <div className="space-y-5">
-        <Board title={t("Waiting for pickup")} hint={t("New orders at the merchant")} mode="pickup" rows={pickups} couriers={couriers} />
+        {booked.length > 0 && (
+          <Card>
+            <CardHeader title={t("Pickups booked for today ({day})", { day: dayName(today) })} />
+            <ul className="divide-y divide-line">
+              {booked.map((b) => (
+                <li key={b.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-3 text-sm">
+                  <div>
+                    <p className="font-medium">{b.merchant} <span className="ltr font-normal text-muted">{b.phone}</span></p>
+                    <p className="text-muted">{b.address}{b.note ? ` · ${b.note}` : ""}</p>
+                  </div>
+                  <p className="text-end">
+                    <span className="font-medium">{b.window === "morning" ? t("Morning") : t("Afternoon")}</span>
+                    <span className="block text-muted">{t("{n} orders waiting", { n: b.waiting })}{b.expected > 0 ? ` · ${t("about {n} expected", { n: b.expected })}` : ""}</span>
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
+        <Board title={t("Waiting for pickup")} hint={held > 0 ? t("New orders due today. {n} more wait for the recipient's confirmation or the merchant's pickup day.", { n: held }) : t("New orders at the merchant")} mode="pickup" rows={pickups} couriers={couriers} />
         <Board title={t("Ready for delivery")} hint={t("At the destination hub, including parcels to retry")} mode="delivery" rows={deliveries} couriers={couriers} />
         {later.length > 0 && <Board title={t("Waiting for the day the recipient chose")} hint={t("Auto-assign leaves these until their day. You can still assign one by hand.")} mode="delivery" rows={later} couriers={couriers} />}
       </div>

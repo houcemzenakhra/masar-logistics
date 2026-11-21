@@ -57,6 +57,8 @@ export const merchants = pgTable("merchants", {
   rc: text("rc").notNull().default(""),
   /** New orders wait for the recipient to confirm them (by text message) before a courier is sent. */
   confirmOrders: boolean("confirm_orders").notNull().default(false),
+  /** Days a courier comes for pickups, as Algeria weekdays 0 (Sunday) to 6, e.g. "0,2,4". Empty: every day. */
+  pickupDays: text("pickup_days").notNull().default(""),
   createdAt: createdAt(),
 });
 
@@ -269,6 +271,8 @@ export const parcels = pgTable(
     kind: text("kind", { enum: ["delivery", "return_leg"] }).notNull().default("delivery"),
     /** For a return leg: the delivery it comes from. */
     parentId: text("parent_id"),
+    /** The merchant's own order number (shop, spreadsheet or API). Unique per merchant. */
+    externalRef: text("external_ref"),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -280,6 +284,7 @@ export const parcels = pgTable(
     index("parcels_bag_idx").on(t.bagId),
     index("parcels_phone_idx").on(t.recipientPhone),
     index("parcels_parent_idx").on(t.parentId),
+    uniqueIndex("parcels_external_ref_idx").on(t.merchantId, t.externalRef),
   ],
 );
 
@@ -557,3 +562,80 @@ export const parcelsRelations = relations(parcels, ({ many }) => ({ events: many
 export const parcelEventsRelations = relations(parcelEvents, ({ one }) => ({
   parcel: one(parcels, { fields: [parcelEvents.parcelId], references: [parcels.id] }),
 }));
+
+// ---------- integrations: API keys, webhooks, pickups ----------
+
+/** Keys a merchant's shop or software uses to call the API. Only a hash is stored. */
+export const apiKeys = pgTable(
+  "api_keys",
+  {
+    id: id(),
+    merchantId: text("merchant_id").notNull().references(() => merchants.id),
+    name: text("name").notNull(),
+    /** First characters of the key, shown so people can tell keys apart. */
+    prefix: text("prefix").notNull(),
+    hash: text("hash").notNull().unique(),
+    createdBy: text("created_by").notNull().references(() => users.id),
+    lastUsedAt: timestamp("last_used_at", { withTimezone: true }),
+    revokedAt: timestamp("revoked_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("api_keys_merchant_idx").on(t.merchantId)],
+);
+
+/** Where a merchant wants parcel events sent. Each request is signed with `secret`. */
+export const webhookEndpoints = pgTable(
+  "webhook_endpoints",
+  {
+    id: id(),
+    merchantId: text("merchant_id").notNull().references(() => merchants.id),
+    url: text("url").notNull(),
+    secret: text("secret").notNull(),
+    active: boolean("active").notNull().default(true),
+    /** Failures in a row; reset by a success. */
+    failures: integer("failures").notNull().default(0),
+    lastSuccessAt: timestamp("last_success_at", { withTimezone: true }),
+    lastFailureAt: timestamp("last_failure_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("webhook_endpoints_merchant_idx").on(t.merchantId)],
+);
+
+/** One event for one endpoint, retried with growing delays until it is accepted or gives up. */
+export const webhookDeliveries = pgTable(
+  "webhook_deliveries",
+  {
+    id: id(),
+    endpointId: text("endpoint_id").notNull().references(() => webhookEndpoints.id),
+    event: text("event").notNull(),
+    parcelId: text("parcel_id"),
+    payload: jsonb("payload").$type<Record<string, unknown>>().notNull(),
+    status: text("status", { enum: ["pending", "sent", "failed"] }).notNull().default("pending"),
+    attempts: integer("attempts").notNull().default(0),
+    nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    responseStatus: integer("response_status"),
+    lastError: text("last_error"),
+    sentAt: timestamp("sent_at", { withTimezone: true }),
+    createdAt: createdAt(),
+  },
+  (t) => [index("webhook_deliveries_due_idx").on(t.status, t.nextAttemptAt), index("webhook_deliveries_endpoint_idx").on(t.endpointId)],
+);
+
+/** A pickup the merchant booked for a given day, on top of (or instead of) their regular days. */
+export const pickupRequests = pgTable(
+  "pickup_requests",
+  {
+    id: id(),
+    merchantId: text("merchant_id").notNull().references(() => merchants.id),
+    /** YYYY-MM-DD, Algeria time. */
+    day: text("day").notNull(),
+    window: text("window", { enum: ["morning", "afternoon"] }).notNull().default("morning"),
+    note: text("note").notNull().default(""),
+    /** Parcels the merchant expects to hand over, to size the run. */
+    expected: integer("expected").notNull().default(0),
+    status: text("status", { enum: ["booked", "cancelled"] }).notNull().default("booked"),
+    createdBy: text("created_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("pickup_requests_day_idx").on(t.day), uniqueIndex("pickup_requests_merchant_day_idx").on(t.merchantId, t.day)],
+);

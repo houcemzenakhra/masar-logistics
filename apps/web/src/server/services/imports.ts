@@ -28,6 +28,8 @@ export type RowValues = {
   weightKg: number;
   description?: string;
   recipientLang: "fr" | "ar";
+  /** The shop's order number, from a "ref" or "order" column. */
+  externalRef?: string;
 };
 
 export type CheckedRow = {
@@ -44,7 +46,7 @@ export type CheckedRow = {
 
 // ---------- reading files ----------
 
-export const FIELDS = ["name", "phone", "wilaya", "commune", "address", "cod", "weight", "contents", "lang"] as const;
+export const FIELDS = ["name", "phone", "wilaya", "commune", "address", "cod", "weight", "contents", "lang", "ref", "paid"] as const;
 type Field = (typeof FIELDS)[number];
 export const REQUIRED: Field[] = ["name", "phone", "wilaya", "commune", "address", "cod"];
 
@@ -59,7 +61,20 @@ const ALIASES: Record<Field, string[]> = {
   weight: ["weight", "weight kg", "weight_kg", "kg", "poids", "poids kg", "الوزن"],
   contents: ["contents", "description", "product", "products", "item", "produit", "produits", "article", "contenu", "المحتوى", "المنتج"],
   lang: ["lang", "language", "langue", "sms", "sms language", "langue sms", "اللغة"],
+  ref: ["ref", "reference", "order", "order id", "order number", "order ref", "order reference", "order reference number", "commande", "n commande", "no commande", "numero de commande", "reference commande", "id commande", "رقم الطلب", "مرجع الطلب", "المرجع"],
+  /** A payment status column: an order marked paid is not collected again. */
+  paid: ["payment status", "financial status", "statut de paiement", "statut paiement", "paiement", "حاله الدفع"],
 };
+// Shop exports (YouCan and the like) name these differently.
+ALIASES.name.push("customer name", "full name", "nom complet", "client name", "shipping name");
+ALIASES.phone.push("customer phone", "phone number", "telephone client", "telephone du client", "shipping phone", "هاتف الزبون");
+ALIASES.address.push("shipping address", "adresse de livraison", "adresse livraison", "عنوان التوصيل");
+ALIASES.cod.push("order total", "total commande", "montant total", "total price", "المجموع");
+ALIASES.contents.push("product names and skus", "product name", "products names", "nom du produit", "produits commandes");
+ALIASES.wilaya.push("region", "region name", "shipping province name", "shipping province");
+ALIASES.commune.push("shipping city", "localite");
+
+const PAID = ["paid", "payee", "paye", "refunded", "rembourse", "مدفوع", "مدفوعه"];
 
 /** Lower case, accents and Arabic diacritics removed, punctuation turned into spaces. */
 export function norm(s: unknown): string {
@@ -102,7 +117,85 @@ export function mapHeader(header: string[]): { map: Partial<Record<Field, number
     const f = FIELDS.find((k) => ALIASES[k].some((a) => norm(a) === n));
     if (f && map[f] === undefined) map[f] = i;
   });
-  return { map, missing: REQUIRED.filter((f) => map[f] === undefined) };
+  // Without wilaya and commune columns, both are read from the address (shop exports keep the
+  // whole address in one column). Rows where that fails are shown to fix.
+  const fromAddress: Field[] = map.address !== undefined ? ["wilaya", "commune"] : [];
+  return { map, missing: REQUIRED.filter((f) => map[f] === undefined && !fromAddress.includes(f)) };
+}
+
+/**
+ * Shopify's order export: "Name" is the order number, the recipient is "Shipping Name", and an
+ * order with several products takes several rows, the later ones mostly empty.
+ */
+export function shopifyRecords(table: string[][]): Partial<Record<Field, string>>[] | null {
+  const head = table[0].map(norm);
+  const col = (...names: string[]) => names.map((n) => head.indexOf(norm(n))).find((i) => i >= 0) ?? -1;
+  if (col("lineitem name") < 0 || col("shipping name") < 0 || col("name") < 0) return null;
+  const at = (r: string[], ...names: string[]) => {
+    for (const n of names) {
+      const i = col(n);
+      if (i >= 0 && (r[i] ?? "").trim()) return r[i].trim();
+    }
+    return "";
+  };
+  const orders = new Map<string, { rec: Partial<Record<Field, string>>; items: string[] }>();
+  for (const r of table.slice(1)) {
+    const ref = at(r, "name");
+    if (!ref) continue;
+    const item = at(r, "lineitem name");
+    const qty = at(r, "lineitem quantity");
+    const line = item ? (qty && qty !== "1" ? `${qty} × ${item}` : item) : "";
+    const o = orders.get(ref);
+    if (o) {
+      if (line) o.items.push(line);
+      continue;
+    }
+    const paidStatus = norm(at(r, "financial status"));
+    const outstanding = at(r, "outstanding balance");
+    const cod = ["paid", "refunded", "partially refunded"].includes(paidStatus) ? "0" : outstanding || at(r, "total");
+    orders.set(ref, {
+      rec: {
+        ref,
+        name: at(r, "shipping name", "billing name"),
+        phone: at(r, "shipping phone", "phone", "billing phone"),
+        wilaya: at(r, "shipping province name", "shipping province").replace(/^dz[-\s]?/i, ""),
+        commune: at(r, "shipping city"),
+        address: [at(r, "shipping address1"), at(r, "shipping address2")].filter(Boolean).join(", ") || at(r, "shipping street"),
+        cod,
+      },
+      items: line ? [line] : [],
+    });
+  }
+  return [...orders.values()].map(({ rec, items }) => ({ ...rec, contents: items.join("; ") }));
+}
+
+/**
+ * Finds the wilaya and commune named in a free-text address, longest name first. A commune name
+ * found alone settles the wilaya too when only one wilaya has a commune of that name.
+ */
+export function guessPlace(address: string, ref: Pick<Ref, "wilayas" | "communes">): { wilaya?: W; commune?: C } {
+  const text = ` ${norm(address)} `;
+  const has = (name: string) => {
+    const n = norm(name);
+    return n.length >= 3 && text.includes(` ${n} `);
+  };
+  const wilayaHits = ref.wilayas
+    .flatMap((w) => [w.name, w.nameAr, ...Object.entries(WILAYA_ALT).filter(([, id]) => id === w.id).map(([k]) => k)].filter(has).map((n) => ({ w, len: norm(n).length })))
+    .sort((a, b) => b.len - a.len);
+  let wilaya: W | undefined = wilayaHits[0]?.w;
+  const pool = wilaya ? ref.communes.filter((c) => c.wilayaId === wilaya!.id) : ref.communes;
+  const communeHits = pool
+    .flatMap((c) => [c.name, c.nameAr].filter(has).map((n) => ({ c, len: norm(n).length })))
+    .sort((a, b) => b.len - a.len);
+  let commune: C | undefined = communeHits[0]?.c;
+  if (!wilaya && commune) {
+    const sameName = communeHits.filter((h) => h.len === communeHits[0].len && h.c.wilayaId !== commune!.wilayaId);
+    if (sameName.length) commune = undefined;
+    else wilaya = ref.wilayas.find((w) => w.id === commune!.wilayaId);
+  }
+  // Only the wilaya named: its commune of the same name (the wilaya's seat), when there is one.
+  if (wilaya && !commune) commune = ref.communes.find((c) => c.wilayaId === wilaya!.id && norm(c.name) === norm(wilaya!.name));
+  return { wilaya, commune };
 }
 
 // ---------- matching places ----------
@@ -203,7 +296,7 @@ export function checkRecord(rec: Partial<Record<Field, string>>, line: number, r
   const address = get("address");
   if (address.length < 4) errors.push({ m: "Address is missing or too short" });
 
-  const cod = money(get("cod"));
+  const cod = PAID.includes(norm(get("paid"))) ? 0 : money(get("cod"));
   if (cod === null) errors.push({ m: get("cod") ? "“{x}” is not an amount" : "Amount to collect is missing (write 0 if already paid)", v: { x: get("cod") } });
   else if (cod < 0 || cod > 2_000_000) errors.push({ m: "Amount must be between 0 and 2,000,000 DZD" });
   else if (!Number.isInteger(cod)) errors.push({ m: "Amount must be whole dinars" });
@@ -224,7 +317,7 @@ export function checkRecord(rec: Partial<Record<Field, string>>, line: number, r
   return {
     line,
     raw,
-    values: { recipientName: name, recipientPhone: phone, destWilayaId: w.id, communeId: commune.id, address, codAmount: cod, weightKg: weight, description: contents || undefined, recipientLang: lang },
+    values: { recipientName: name, recipientPhone: phone, destWilayaId: w.id, communeId: commune.id, address, codAmount: cod, weightKg: weight, description: contents || undefined, recipientLang: lang, externalRef: get("ref").slice(0, 80) || undefined },
     shown: { wilaya: w.name, commune: commune.name, fee: quote(tier, weight).deliveryFee },
     errors,
     warnings,
@@ -233,6 +326,26 @@ export function checkRecord(rec: Partial<Record<Field, string>>, line: number, r
 
 /** Flags the same phone and amount twice in the file, or already ordered in the last 7 days. */
 async function flagDuplicates(q: Q, merchantId: string, rows: CheckedRow[]) {
+  // An order number already sent, or twice in the file, is refused: it would ship twice.
+  const refs = new Map<string, number>();
+  for (const r of rows) {
+    const x = r.values?.externalRef;
+    if (!x) continue;
+    if (refs.has(x)) {
+      r.errors.push({ m: "Order {x} is also on line {n}", v: { x, n: refs.get(x)! } });
+      r.values = null;
+    } else refs.set(x, r.line);
+  }
+  if (refs.size) {
+    const used = await q.select({ ref: parcels.externalRef, tracking: parcels.tracking }).from(parcels).where(and(eq(parcels.merchantId, merchantId), inArray(parcels.externalRef, [...refs.keys()])));
+    for (const r of rows) {
+      const hit = r.values?.externalRef && used.find((u) => u.ref === r.values!.externalRef);
+      if (hit) {
+        r.errors.push({ m: "Order {x} was already sent as {t}", v: { x: hit.ref!, t: hit.tracking } });
+        r.values = null;
+      }
+    }
+  }
   const seen = new Map<string, number>();
   for (const r of rows) {
     if (!r.values) continue;
@@ -256,6 +369,12 @@ export async function checkRecords(q: Q, merchantId: string, records: Partial<Re
   if (records.length === 0) throw new DomainError("The file has no orders under the header row.");
   if (records.length > MAX_ROWS) throw new DomainError("At most 1000 orders per file. Split it into smaller files.");
   const ref = await loadRef(q, merchantId);
+  for (const r of records) {
+    if ((r.wilaya?.trim() && r.commune?.trim()) || !r.address?.trim()) continue;
+    const g = guessPlace([r.commune, r.wilaya, r.address].filter(Boolean).join(" "), ref);
+    if (!r.wilaya?.trim() && g.wilaya) r.wilaya = String(g.wilaya.id);
+    if (!r.commune?.trim() && g.commune) r.commune = g.commune.name;
+  }
   const rows = records.map((r, i) => checkRecord(r, firstLine + i, ref));
   await flagDuplicates(q, merchantId, rows);
   return rows;
@@ -270,9 +389,12 @@ export async function stageImport(q: Q, a: { merchantId: string; userId: string;
   if (m?.status === "suspended") throw new DomainError("This merchant account is suspended");
   const table = (await readRows(a.file)).filter((r) => r.some((c) => c !== ""));
   if (table.length === 0) throw new DomainError("The file is empty.");
-  const { map, missing } = mapHeader(table[0]);
-  if (missing.length) throw new ImportHeaderError(missing);
-  const records = table.slice(1).map((r) => Object.fromEntries(Object.entries(map).map(([f, i]) => [f, r[i!] ?? ""])) as Partial<Record<Field, string>>);
+  let records = shopifyRecords(table);
+  if (!records) {
+    const { map, missing } = mapHeader(table[0]);
+    if (missing.length) throw new ImportHeaderError(missing);
+    records = table.slice(1).map((r) => Object.fromEntries(Object.entries(map).map(([f, i]) => [f, r[i!] ?? ""])) as Partial<Record<Field, string>>);
+  }
   const rows = await checkRecords(q, a.merchantId, records);
   const valid = rows.filter((r) => r.values).length;
   const [b] = await q

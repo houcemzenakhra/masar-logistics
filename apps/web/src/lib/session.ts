@@ -4,6 +4,8 @@ import { cache } from "react";
 import { initLocale } from "@/lib/i18n";
 import { HOME, SESSION_COOKIE, verifySession, type Session } from "@/server/auth";
 import type { Role } from "@/server/domain/state";
+import { getDb } from "@/server/db";
+import { looksLikeApiKey, verifyApiKey } from "@/server/services/integrations";
 
 // One database check per request, however many components ask for the session.
 const cookieSession = cache(async () => verifySession((await cookies()).get(SESSION_COOKIE)?.value));
@@ -38,6 +40,11 @@ export async function requireRole(...roles: Role[]): Promise<Session> {
 /** For /api/v1 route handlers: cookie or `Authorization: Bearer <token>`. */
 export async function apiSession(req: Request): Promise<Session | null> {
   const h = req.headers.get("authorization");
-  if (h?.toLowerCase().startsWith("bearer ")) return verifySession(h.slice(7));
+  if (h?.toLowerCase().startsWith("bearer ")) {
+    const token = h.slice(7).trim();
+    // A merchant's API key (msr_live_…) for shops and scripts; otherwise an app session.
+    if (looksLikeApiKey(token)) return verifyApiKey(await getDb(), token);
+    return verifySession(token);
+  }
   return cookieSession();
 }

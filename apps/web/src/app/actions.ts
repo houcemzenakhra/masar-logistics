@@ -29,6 +29,9 @@ import { rate, reschedule, setInstructions, verifyRecipient } from "@/server/ser
 import { optimiseCourierRoute } from "@/server/services/routes";
 import { LIMITS, audit, checkLimit, clearLimit, createResetToken, rateLimit, resetPassword } from "@/server/services/security";
 import { registerMerchant, setMerchantStatus } from "@/server/services/signup";
+import { IntegrationError, createApiKey, createEndpoint, removeEndpoint, revokeApiKey, sendTestEvent } from "@/server/services/integrations";
+import { PickupError, bookPickup, cancelPickup, setPickupDays } from "@/server/services/pickups";
+import { dayName } from "@/lib/format";
 import { DeskError, createDesk, setDeskActive, setDeskSettings } from "@/server/services/desks";
 import { answerConfirmation, setConfirmOrders, setHistorySettings } from "@/server/services/returns";
 import { PARCEL_KINDS, dispatch, queueSms, renderResetSms, setSmsSettings } from "@/server/services/sms";
@@ -40,7 +43,7 @@ async function guard(fn: (t: Awaited<ReturnType<typeof getT>>) => Promise<FormSt
     return (await fn(t)) ?? {};
   } catch (e) {
     if (e instanceof z.ZodError) return { error: t(e.issues[0].message) };
-    if (e instanceof DomainError || e instanceof DeskError) return { error: t(e.message) };
+    if (e instanceof DomainError || e instanceof DeskError || e instanceof IntegrationError || e instanceof PickupError) return { error: t(e.message) };
     if (e instanceof Error && /only holds|is owed|available to pay|positive whole/.test(e.message)) return { error: t(e.message) };
     throw e;
   }
@@ -833,5 +836,82 @@ export async function companyAction(_: FormState, fd: FormData): Promise<FormSta
     await log(s, "settings.company", "settings", "company", {});
     refresh();
     return { ok: t("Saved.") };
+  });
+}
+
+// ---------- integrations: API keys, webhooks, pickups ----------
+
+export async function createApiKeyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const k = await createApiKey(await getDb(), { merchantId: s.merchantId!, userId: s.userId, name: str(fd, "name") });
+    await log(s, "api_key.create", "api_key", k.id, { name: k.name, prefix: k.prefix });
+    refresh();
+    return { ok: t("Copy the key now: it is shown only once."), secret: k.key };
+  });
+}
+
+export async function revokeApiKeyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async () => {
+    const k = await revokeApiKey(await getDb(), s.merchantId!, str(fd, "id"));
+    await log(s, "api_key.revoke", "api_key", k.id, { name: k.name });
+    refresh();
+  });
+}
+
+export async function createWebhookAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const ep = await createEndpoint(await getDb(), s.merchantId!, str(fd, "url"));
+    await log(s, "webhook.create", "webhook", ep.id, { url: ep.url });
+    refresh();
+    return { ok: t("Added. Check incoming requests with this signing secret:"), secret: ep.secret };
+  });
+}
+
+export async function removeWebhookAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async () => {
+    await removeEndpoint(await getDb(), s.merchantId!, str(fd, "id"));
+    await log(s, "webhook.remove", "webhook", str(fd, "id"));
+    refresh();
+  });
+}
+
+export async function testWebhookAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const d = await sendTestEvent(await getDb(), s.merchantId!, str(fd, "id"));
+    refresh();
+    if (d.status === "sent") return { ok: t("Your server answered {code}. It works.", { code: d.responseStatus ?? 200 }) };
+    return { error: t("Not delivered: {why}", { why: d.lastError ?? "?" }) };
+  });
+}
+
+export async function pickupDaysAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const days = await setPickupDays(await getDb(), s.merchantId!, fd.getAll("days").map((d) => Number(d)));
+    refresh();
+    return { ok: days.length ? t("Saved. Couriers come on the days you ticked.") : t("Saved. Couriers come every day you have orders.") };
+  });
+}
+
+export async function bookPickupAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async (t) => {
+    const w = str(fd, "window") === "afternoon" ? "afternoon" : "morning";
+    await bookPickup(await getDb(), { merchantId: s.merchantId!, userId: s.userId, day: str(fd, "day"), window: w, note: str(fd, "note"), expected: Number(str(fd, "expected")) || 0 });
+    refresh();
+    return { ok: t("Booked. A courier comes on {day}.", { day: dayName(str(fd, "day")) }) };
+  });
+}
+
+export async function cancelPickupAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  return guard(async () => {
+    await cancelPickup(await getDb(), s.merchantId!, str(fd, "id"));
+    refresh();
   });
 }

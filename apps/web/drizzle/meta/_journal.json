@@ -43,6 +43,13 @@
       "when": 1795269980380,
       "tag": "0005_returns",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1795271784114,
+      "tag": "0006_integrations",
+      "breakpoints": true
     }
   ]
 }

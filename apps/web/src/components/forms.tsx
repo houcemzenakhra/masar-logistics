@@ -1,10 +1,10 @@
 "use client";
 
-import { createContext, startTransition, useActionState, useContext, type ReactNode } from "react";
+import { createContext, startTransition, useActionState, useContext, useState, type ReactNode } from "react";
 import { useFormStatus } from "react-dom";
 import { useT } from "./i18n-client";
 
-export type FormState = { error?: string; ok?: string } | undefined;
+export type FormState = { error?: string; ok?: string; /** Shown once, with a copy button: a new API key. */ secret?: string } | undefined;
 type Action = (prev: FormState, fd: FormData) => Promise<FormState>;
 
 const Pending = createContext(false);
@@ -35,6 +35,7 @@ export function ActionForm({ action, className, children }: { action: Action; cl
           {state.ok}
         </p>
       )}
+      {state?.secret && <SecretBox value={state.secret} />}
     </form>
   );
 }
@@ -75,5 +76,23 @@ export function Submit({
     >
       {pending ? t("Working…") : children}
     </button>
+  );
+}
+
+/** A value to copy now, because it will not be shown again. */
+export function SecretBox({ value }: { value: string }) {
+  const t = useT();
+  const [copied, setCopied] = useState(false);
+  return (
+    <div className="mt-2 flex basis-full items-center gap-2 rounded-lg bg-navy px-3 py-2">
+      <code dir="ltr" className="min-w-0 flex-1 truncate font-mono text-[13px] text-white">{value}</code>
+      <button
+        type="button"
+        onClick={() => navigator.clipboard?.writeText(value).then(() => setCopied(true), () => setCopied(false))}
+        className="shrink-0 rounded-md bg-white/10 px-2.5 py-1 text-xs font-medium text-white hover:bg-white/20"
+      >
+        {copied ? t("Copied") : t("Copy")}
+      </button>
+    </div>
   );
 }

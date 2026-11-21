@@ -7,11 +7,19 @@ import { normalizeMobile } from "../phone";
 import { MAX_ATTEMPTS, canTransition, type Status } from "../domain/state";
 import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, stopDesks, users, wilayas } from "../schema";
 import { deskFee, getDeskSettings } from "./desks";
+import { parcelEventData, queueWebhook } from "./integrations";
 import { acct, post } from "./ledger";
 import { FAIL_REASONS, REASON_TEXT, merchantUsers, notify, type FailReason } from "./notify";
 import { queueParcelSms } from "./sms";
 
 export class DomainError extends Error {}
+
+/** The merchant's order number is already on a parcel. Carries the existing tracking number. */
+export class DuplicateOrderError extends DomainError {
+  constructor(public externalRef: string, public tracking: string) {
+    super(`Order ${externalRef} was already sent as ${tracking}`);
+  }
+}
 
 export type Actor = Pick<Session, "userId" | "role" | "merchantId" | "hubId">;
 
@@ -72,6 +80,7 @@ const view = {
   collectedAmount: parcels.collectedAmount,
   kind: parcels.kind,
   parentId: parcels.parentId,
+  externalRef: parcels.externalRef,
   createdAt: parcels.createdAt,
   updatedAt: parcels.updatedAt,
   deliveredAt: parcels.deliveredAt,
@@ -105,6 +114,8 @@ export async function listParcels(
     status?: Status | Status[];
     /** Stop desk parcels of one hub, for its desk counter. */
     deskHubId?: string;
+    /** The merchant's own order number. */
+    externalRef?: string;
     search?: string;
     limit?: number;
   } = {},
@@ -117,6 +128,7 @@ export async function listParcels(
   if (f.baggable) {
     where.push(eq(parcels.status, "at_origin_hub"), eq(parcels.currentHubId, f.baggable.originHubId), eq(parcels.destHubId, f.baggable.destHubId), sql`${parcels.bagId} is null`);
   }
+  if (f.externalRef) where.push(eq(parcels.externalRef, f.externalRef));
   if (f.deskHubId) where.push(eq(parcels.deliveryType, "desk"), eq(parcels.destHubId, f.deskHubId));
   if (f.status) where.push(Array.isArray(f.status) ? inArray(parcels.status, f.status) : eq(parcels.status, f.status));
   if (f.search?.trim()) {
@@ -186,6 +198,8 @@ export type NewParcel = {
   /** The courier collects an item on delivery; `exchangeNote` says which. */
   exchange?: boolean;
   exchangeNote?: string;
+  /** The merchant's own order number. An order with a number already used is refused. */
+  externalRef?: string;
 };
 
 export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = new Date()) {
@@ -209,6 +223,11 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
       else commune = commune || desk.address;
     }
     if (input.exchange && !input.exchangeNote?.trim()) throw new DomainError("Say which item the courier collects in exchange");
+    const externalRef = input.externalRef?.trim().slice(0, 80) || null;
+    if (externalRef) {
+      const [dup] = await tx.select({ tracking: parcels.tracking }).from(parcels).where(and(eq(parcels.merchantId, m.id), eq(parcels.externalRef, externalRef)));
+      if (dup) throw new DuplicateOrderError(externalRef, dup.tracking);
+    }
     if (input.communeId) {
       const [c] = await tx.select().from(communes).where(eq(communes.id, input.communeId));
       if (!c || c.wilayaId !== input.destWilayaId) throw new DomainError("That commune is not in the chosen wilaya");
@@ -235,6 +254,7 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
         exchange: input.exchange ?? false,
         exchangeNote: input.exchange ? input.exchangeNote!.trim().slice(0, 200) : "",
         confirmation: m.confirmOrders ? "pending" : "none",
+        externalRef,
         description: input.description ?? "",
         tracking: newTracking(),
         originWilayaId: origin.id,
@@ -248,6 +268,7 @@ export async function createParcel(db: Q, input: NewParcel, actor: Actor, at = n
       .returning();
     await tx.insert(parcelEvents).values({ parcelId: p.id, status: "created", actorId: actor.userId, note: "Order created", createdAt: at });
     if (p.confirmation === "pending") await queueParcelSms(tx, p.id, "confirm_order");
+    await queueWebhook(tx, p.merchantId, "parcel.created", parcelEventData(p), p.id);
     return p;
   });
 }
@@ -440,6 +461,10 @@ export async function transition(db: Q, input: TransitionInput) {
     if (to === "delivered" && (partial || p.exchange) && p.kind === "delivery") {
       leg = await createReturnLeg(tx, p, partial ? `Not kept from ${p.tracking}: ${input.returnedItems!.trim()}` : `Exchange from ${p.tracking}: ${p.exchangeNote}`, from === "ready_for_pickup" ? null : p.courierId, actor, at);
     }
+
+    // Tell the merchant's shop, if it listens.
+    await queueWebhook(tx, p.merchantId, "parcel.status_changed", parcelEventData(updated, from), p.id);
+    if (leg) await queueWebhook(tx, p.merchantId, "parcel.created", parcelEventData(leg), leg.id);
 
     // Text the recipient. Queued in this transaction, sent after the response.
     if (to === "out_for_delivery") await queueParcelSms(tx, p.id, "out_for_delivery");

@@ -3,6 +3,8 @@ import { auth, json, route } from "@/lib/api";
 import { getDb } from "@/server/db";
 import { normalizeMobile } from "@/server/phone";
 import { STATUSES, type Status } from "@/server/domain/state";
+import { listCommunes } from "@/server/services/directory";
+import { matchCommune } from "@/server/services/imports";
 import { DomainError, createParcel, listParcels } from "@/server/services/parcels";
 
 export const GET = route(async (req) => {
@@ -14,6 +16,7 @@ export const GET = route(async (req) => {
     courierId: s.role === "courier" ? s.userId : undefined,
     status: status?.length ? status : undefined,
     search: u.searchParams.get("q") ?? undefined,
+    externalRef: u.searchParams.get("externalRef") ?? undefined,
   });
   return json({ parcels });
 });
@@ -38,6 +41,8 @@ const Body = z.object({
   allowPartial: z.boolean().optional(),
   exchange: z.boolean().optional(),
   exchangeNote: z.string().trim().max(200).optional(),
+  /** Your own order number. Sending the same one again answers 409 with the tracking number. */
+  externalRef: z.string().trim().min(1).max(80).optional(),
 }).refine((b) => b.deliveryType === "desk" || !!b.address, { message: "address is required for home delivery", path: ["address"] });
 
 export const POST = route(async (req) => {
@@ -45,6 +50,10 @@ export const POST = route(async (req) => {
   const b = Body.parse(await req.json());
   const merchantId = s.role === "merchant" ? s.merchantId! : b.merchantId;
   if (!merchantId) throw new DomainError("merchantId is required");
-  const parcel = await createParcel(await getDb(), { ...b, address: b.address ?? "", recipientPhone: normalizeMobile(b.recipientPhone)!, weightKg: Math.ceil(b.weightKg), merchantId }, s);
+  const db = await getDb();
+  // A commune sent as text (shop plugins) is matched to the directory, so it lands on the map.
+  let communeId = b.communeId;
+  if (!communeId && b.commune) communeId = matchCommune(b.commune, (await listCommunes(db, b.destWilayaId)).map((c) => ({ ...c, wilayaId: b.destWilayaId }))).commune?.id;
+  const parcel = await createParcel(db, { ...b, communeId, address: b.address ?? "", recipientPhone: normalizeMobile(b.recipientPhone)!, weightKg: Math.ceil(b.weightKg), merchantId }, s);
   return json({ parcel }, 201);
 });

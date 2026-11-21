@@ -3,7 +3,8 @@ import COMMUNES from "./data/communes.json";
 import { hashPassword } from "./auth";
 import type { DB } from "./db";
 import type { Status } from "./domain/state";
-import { communes, hubs, merchants, rateTiers, users, wilayas } from "./schema";
+import { communes, hubs, merchants, pickupRequests, rateTiers, users, wilayas } from "./schema";
+import { algeriaDay } from "./services/pickups";
 import { courierCash, handover, merchantOwed, payout } from "./services/ledger";
 import { createParcel, transition, type Actor, type NewParcel } from "./services/parcels";
 import { createDesk } from "./services/desks";
@@ -131,7 +132,7 @@ async function seedDemo(db: DB, hubId: Record<string, string>, password: string)
     ])
     .returning();
 
-  const [admin, hubUser, c1, c2] = await db
+  const [admin, hubUser, c1, c2, , m2User] = await db
     .insert(users)
     .values([
       { name: "Sem Admin", email: "admin@masar.dz", role: "admin", passwordHash: pw },
@@ -241,6 +242,8 @@ async function seedDemo(db: DB, hubId: Record<string, string>, password: string)
   const part = await extra({ merchantId: m1.id, allowPartial: true, description: "3 articles: robe, foulard, sac" }, 4);
   await run(part.id, ["pickup_assigned", "picked_up", "at_origin_hub", "out_for_delivery"], c2.id);
   await setConfirmOrders(db, m2.id, true);
+  // TechZone booked a pickup for today.
+  await db.insert(pickupRequests).values({ merchantId: m2.id, day: algeriaDay(), window: "afternoon", expected: 6, note: "Cartons au rez-de-chaussée", createdBy: m2User.id });
   await extra({ merchantId: m2.id, description: "Casque Bluetooth" }, 5);
 
   // Half of the cash each Algiers courier collected has been handed over, and one merchant paid once.

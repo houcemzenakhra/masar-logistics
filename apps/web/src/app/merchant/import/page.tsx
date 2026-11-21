@@ -23,6 +23,7 @@ const COLUMNS: [string, string, boolean][] = [
   ["Weight", "In kg. 1 if left empty.", false],
   ["Contents", "What is in the parcel.", false],
   ["SMS language", "fr or ar. French if left empty.", false],
+  ["Ref", "Your order number. An order already sent is refused.", false],
 ];
 
 export default async function Import() {
@@ -53,6 +54,7 @@ export default async function Import() {
               </a>
             ))}
           </div>
+          <p className="mt-4 border-t border-line pt-4 text-sm text-muted">{t("Shopify and YouCan order exports work as they are: upload the CSV your shop gives you. Add an order number column (ref) to any file, and an order already sent is refused instead of shipped twice.")}</p>
         </Card>
       </div>
 

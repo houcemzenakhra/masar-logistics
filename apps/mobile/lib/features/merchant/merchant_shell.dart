@@ -32,6 +32,7 @@ class _MerchantShellState extends ConsumerState<MerchantShell> {
         title: Text(titles[_tab]),
         actions: [
           const InboxBell(),
+          IconButton(tooltip: tr('Pickups'), onPressed: () => context.push('/pickups'), icon: const Icon(Icons.local_shipping_outlined)),
           IconButton(tooltip: tr('Settings'), onPressed: () => context.push('/settings'), icon: const Icon(Icons.settings_outlined)),
         ],
       ),

@@ -5,6 +5,7 @@
 import { and, eq, gte, ne, sql } from "drizzle-orm";
 import type { Q } from "../db";
 import { merchants, parcelEvents, parcels, recipientRequests, settings } from "../schema";
+import { parcelEventData, queueWebhook } from "./integrations";
 import { merchantUsers, notify } from "./notify";
 import { DomainError, type Actor } from "./parcels";
 
@@ -36,6 +37,8 @@ export async function answerConfirmation(db: Q, parcelId: string, yes: boolean, 
       actorId: by === "recipient" ? null : by.userId,
       createdAt: now,
     });
+    const [after] = await tx.select().from(parcels).where(eq(parcels.id, p.id));
+    if (!yes) await queueWebhook(tx, p.merchantId, "parcel.status_changed", parcelEventData(after, p.status, "Declined by the recipient"), p.id);
     if (by === "recipient") await tx.insert(recipientRequests).values({ parcelId: p.id, kind: yes ? "confirm" : "decline", payload: {} });
     const people = await merchantUsers(tx, p.merchantId);
     await notify(tx, people, yes ? "confirmed" : "declined", { tracking: p.tracking, name: p.recipientName }, { parcelId: p.id }, `${p.id}:confirmation`);

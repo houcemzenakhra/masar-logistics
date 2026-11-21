@@ -4,6 +4,7 @@ import type { Q } from "../db";
 import { hubs, parcels, users } from "../schema";
 import { notify } from "./notify";
 import { DomainError, transition, type Actor } from "./parcels";
+import { pickupDueSql } from "./pickups";
 import { optimiseCourierRoute } from "./routes";
 
 /** Today in Algeria, YYYY-MM-DD. */
@@ -16,7 +17,8 @@ export const algeriaToday = (d = new Date()) => new Intl.DateTimeFormat("en-CA",
 export async function waiting(q: Q, mode: "pickup" | "delivery") {
   if (mode === "pickup") {
     // An order waiting for the recipient's confirmation is not picked up yet.
-    return q.select({ id: parcels.id, hubId: parcels.originHubId }).from(parcels).where(and(eq(parcels.status, "created"), ne(parcels.confirmation, "pending")));
+    // Nor is one whose merchant has no pickup today (regular days or a booking).
+    return q.select({ id: parcels.id, hubId: parcels.originHubId }).from(parcels).where(and(eq(parcels.status, "created"), ne(parcels.confirmation, "pending"), pickupDueSql(algeriaToday())));
   }
   return q
     .select({ id: parcels.id, hubId: parcels.destHubId })
