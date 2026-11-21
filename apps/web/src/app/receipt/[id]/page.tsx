@@ -3,7 +3,7 @@ import { PrintButton } from "@/components/print-button";
 import { Logo } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
 import { initLocale, t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getHandover } from "@/server/services/money";
 
@@ -12,7 +12,7 @@ export const metadata = { title: "Cash receipt" };
 /** Receipt for cash a courier handed in, signed on paper by both sides. */
 export default async function Receipt({ params }: { params: Promise<{ id: string }> }) {
   await initLocale();
-  const s = await requireRole("admin", "hub", "courier");
+  const s = await requireStaff("finance", "hub", "courier");
   const h = await getHandover(await getDb(), (await params).id);
   if (!h || (s.role === "courier" && h.courierId !== s.userId) || (s.role === "hub" && h.hubId !== s.hubId)) notFound();
   const row = (k: string, v: string, strong = false) => (

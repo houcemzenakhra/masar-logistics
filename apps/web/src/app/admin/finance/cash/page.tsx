@@ -5,7 +5,7 @@ import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, CardHeader, Input, Money, Mono, PageHeader, Table, Td } from "@/components/ui";
 import { dateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { couriersWithCash, listHandovers } from "@/server/services/money";
 
@@ -14,7 +14,7 @@ export const metadata = { title: "Cash checks" };
 const RESOLUTION = { none: null, repaid: ["Repaid", "success"], written_off: ["Written off", "neutral"], deducted: ["To deduct from pay", "info"], settled_by_pay: ["Deducted from pay", "success"] } as const;
 
 export default async function Cash() {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("finance", "hub");
   const db = await getDb();
   const hubId = s.role === "hub" ? s.hubId : null;
   const [couriers, recent, open] = await Promise.all([couriersWithCash(db, hubId), listHandovers(db, { hubId }), s.role === "admin" ? listHandovers(db, { shortOnly: true }) : Promise.resolve([])]);

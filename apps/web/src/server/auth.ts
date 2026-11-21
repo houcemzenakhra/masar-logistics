@@ -1,6 +1,7 @@
 import bcrypt from "bcryptjs";
 import { eq } from "drizzle-orm";
 import { SignJWT, jwtVerify } from "jose";
+import type { StaffRole } from "@/lib/staff";
 import type { Role } from "./domain/state";
 import { getDb, schema, type Q } from "./db";
 
@@ -13,6 +14,10 @@ export type Session = {
   hubId: string | null;
   /** The account's session version when this session was issued. */
   ver: number;
+  /** Operations staff: which areas they work in. */
+  staffRole?: StaffRole;
+  /** Two-step sign-in is on for this account. */
+  twoStep?: boolean;
 };
 
 export const SESSION_COOKIE = "masar_session";
@@ -77,7 +82,7 @@ export async function verifySession(token: string | undefined | null, q?: Q): Pr
 }
 
 function toSession(u: typeof schema.users.$inferSelect): Session {
-  return { userId: u.id, name: u.name, email: u.email, role: u.role, merchantId: u.merchantId, hubId: u.hubId, ver: u.sessionVersion };
+  return { userId: u.id, name: u.name, email: u.email, role: u.role, merchantId: u.merchantId, hubId: u.hubId, ver: u.sessionVersion, staffRole: u.staffRole, twoStep: !!u.totpEnabledAt };
 }
 
 /** Checks a password. Rate limits are applied by the caller, which knows the client's address. */
@@ -91,6 +96,19 @@ export async function login(email: string, password: string): Promise<{ session:
   const session = toSession(u);
   return { session, token: await signSession(session) };
 }
+
+/** A full session for an account, after its second step was checked. */
+export async function sessionFor(userId: string) {
+  const db = await getDb();
+  const [u] = await db.select().from(schema.users).where(eq(schema.users.id, userId));
+  if (!u || !u.active) return null;
+  await db.update(schema.users).set({ lastLoginAt: new Date() }).where(eq(schema.users.id, u.id));
+  const session = toSession(u);
+  return { session, token: await signSession(session) };
+}
+
+/** Holds the account between the password and the code: five minutes, this browser only. */
+export const TWO_STEP_COOKIE = "masar_2step";
 
 export const COOKIE_OPTS = {
   httpOnly: true,

@@ -38,12 +38,39 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
       _error = null;
     });
     try {
-      await ref.read(authProvider.notifier).signIn(_email.text, _password.text);
+      await ref.read(authProvider.notifier).signIn(_email.text, _password.text, askCode: _askCode);
     } on ApiException catch (e) {
-      setState(() => _error = e.status == 401 ? tr('Wrong email or password') : e.message);
+      setState(() => _error = e.status == 401 && !e.message.contains('code') ? tr('Wrong email or password') : tr(e.message));
     } finally {
       if (mounted) setState(() => _busy = false);
     }
+  }
+
+  Future<String?> _askCode() {
+    final c = TextEditingController();
+    return showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(tr('Enter your code')),
+        content: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
+          Text(tr('Open your authenticator app and enter the 6-digit code for this account.')),
+          const SizedBox(height: 12),
+          TextField(
+            controller: c,
+            autofocus: true,
+            maxLength: 12,
+            textAlign: TextAlign.center,
+            autofillHints: const [AutofillHints.oneTimeCode],
+            style: const TextStyle(fontSize: 24, letterSpacing: 8, fontWeight: FontWeight.w700),
+            decoration: InputDecoration(counterText: '', helperText: tr('Lost your phone? Enter one of your recovery codes instead.'), helperMaxLines: 2),
+          ),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: Text(tr('Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(ctx, c.text), child: Text(tr('Sign in'))),
+        ],
+      ),
+    );
   }
 
   Future<void> _server() async {

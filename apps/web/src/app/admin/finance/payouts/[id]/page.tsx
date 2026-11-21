@@ -7,12 +7,12 @@ import { PayoutTable } from "@/components/payouts";
 import { Badge, Card, CardHeader, Field, Input, DownloadButton, PageHeader } from "@/components/ui";
 import { money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getBatch, listPayoutRequests } from "@/server/services/money";
 
 export default async function Batch({ params }: { params: Promise<{ id: string }> }) {
-  await requireRole("admin");
+  await requireStaff("finance");
   const db = await getDb();
   const b = await getBatch(db, (await params).id);
   if (!b) notFound();

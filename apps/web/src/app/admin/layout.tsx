@@ -1,6 +1,7 @@
 import type { NavItem } from "@/components/nav-links";
 import { Shell } from "@/components/shell";
 import { requireRole } from "@/lib/session";
+import { areaOf, canUse } from "@/lib/staff";
 
 export const metadata = { title: "Operations" };
 
@@ -31,6 +32,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   const s = await requireRole("admin", "hub");
   // Hub teams count couriers' cash; operations reach the same page under Finance.
   const cash: NavItem = { href: "/admin/finance/cash", label: "Cash checks", icon: "banknote" };
-  const items = s.role === "admin" ? ADMIN : HUB.map((h) => [...ADMIN, cash].find((i) => i.href === h)!);
+  // Finance, dispatch and support staff see only their areas.
+  const items = s.role === "admin" ? ADMIN.filter((i) => canUse(s.staffRole, areaOf(i.href))) : HUB.map((h) => [...ADMIN, cash].find((i) => i.href === h)!);
   return <Shell session={s} items={items}>{children}</Shell>;
 }

@@ -4,15 +4,17 @@ import { ParcelTable } from "@/components/parcel-table";
 import { Card, CardHeader, LinkButton, Notice, PageHeader, Stat, StatusBadge } from "@/components/ui";
 import { money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
+import { STAFF_LABEL } from "@/lib/staff";
 import { getDb } from "@/server/db";
 import { STATUSES, TERMINAL } from "@/server/domain/state";
 import { listMerchants } from "@/server/services/directory";
 import { acct, balance, balancesByPrefix } from "@/server/services/ledger";
 import { dailyVolume, listParcels, statusCounts } from "@/server/services/parcels";
 
-export default async function Overview() {
-  await requireRole("admin");
+export default async function Overview({ searchParams }: { searchParams: Promise<{ denied?: string }> }) {
+  const s = await requireStaff("overview");
+  const { denied } = await searchParams;
   const db = await getDb();
   const [counts, volume, couriers, merchants, revenue, cash, exceptions, mList] = await Promise.all([
     statusCounts(db),
@@ -41,6 +43,11 @@ export default async function Overview() {
   return (
     <>
       <PageHeader title={t("Overview")} subtitle={t("What is moving through the network right now.")} action={<LinkButton href="/admin/dispatch">{t("Open dispatch")}</LinkButton>} />
+      {denied && (
+        <p role="alert" className="mb-5 rounded-xl bg-warn-soft px-4 py-3 text-sm text-ink">
+          {t("That page is outside your access ({role}). Ask an owner of the account if you need it.", { role: t(STAFF_LABEL[s.staffRole ?? "owner"]) })}
+        </p>
+      )}
       {pending > 0 && (
         <Notice tone="info" title={t("New merchant accounts waiting for approval: {n}.", { n: pending })}>
           <Link href="/admin/merchants" className="font-medium underline">{t("Review them")}</Link>

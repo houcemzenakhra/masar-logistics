@@ -1,14 +1,14 @@
 import { Warehouse } from "lucide-react";
 import { Badge, Card, CardHeader, PageHeader, Table, Td } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listHubs, listWilayas } from "@/server/services/directory";
 
 const ZONE = { 1: ["North", "info"], 2: ["Highlands", "progress"], 3: ["South", "warn"] } as const;
 
 export default async function Network() {
-  await requireRole("admin");
+  await requireStaff("settings");
   const db = await getDb();
   const [hubs, wilayas] = await Promise.all([listHubs(db), listWilayas(db)]);
   return (

@@ -8,12 +8,12 @@ import { PrintButton } from "@/components/print-button";
 import { Card, CardHeader, Money, Mono, Table, Td } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getManifest, listBags, manifestReport } from "@/server/services/linehaul";
 
 export default async function Manifest({ params }: { params: Promise<{ id: string }> }) {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   const db = await getDb();
   const m = await getManifest(db, (await params).id);
   if (!m) notFound();
@@ -74,7 +74,7 @@ export default async function Manifest({ params }: { params: Promise<{ id: strin
             <Table head={["", "Bag", "Parcels", "COD"]} empty={ready.length === 0}>
               {ready.map((b) => (
                 <tr key={b.id}>
-                  <Td className="w-8 pe-0"><input type="checkbox" name="ids" value={b.id} defaultChecked aria-label={t("Select {x}", { x: b.code })} className="size-4 accent-[#ff5b24]" /></Td>
+                  <Td className="w-8 pe-0"><input type="checkbox" name="ids" value={b.id} defaultChecked aria-label={t("Select {x}", { x: b.code })} className="size-4 accent-accent" /></Td>
                   <Td><Link href={`/admin/linehaul/bags/${b.id}`} className="hover:underline"><Mono>{b.code}</Mono></Link></Td>
                   <Td className="tnum">{b.parcels}</Td>
                   <Td><Money value={b.cod} /></Td>

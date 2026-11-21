@@ -6,7 +6,7 @@ import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, CardHeader, Field, Input, PageHeader, Table, Td } from "@/components/ui";
 import { dateTime } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getDeskSettings, listDesks, MIN_DESK_FEE } from "@/server/services/desks";
 import { listHubs, listWilayas } from "@/server/services/directory";
@@ -21,7 +21,7 @@ const daysSince = (d: Date) => Math.floor((Date.now() - d.getTime()) / 86400_000
  * open and close desks and set the discount.
  */
 export default async function Desks({ searchParams }: { searchParams: Promise<{ hub?: string }> }) {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   const db = await getDb();
   const hubs = await listHubs(db);
   const hubId = s.role === "hub" ? s.hubId! : ((await searchParams).hub ?? hubs[0]?.id);

@@ -5,18 +5,7 @@ import { STATUS_LABEL, STATUS_TONE, type Status, type Tone } from "@/server/doma
 
 const cx = (...c: (string | false | null | undefined)[]) => c.filter(Boolean).join(" ");
 
-export function Logo({ light = false, className = "" }: { light?: boolean; className?: string }) {
-  return (
-    <span className={cx("inline-flex items-center gap-2 font-semibold tracking-tight", light ? "text-white" : "text-ink", className)}>
-      <svg width="28" height="28" viewBox="0 0 28 28" aria-hidden>
-        <rect width="28" height="28" rx="8" fill="#ff5b24" />
-        <path d="M7 20V11.5a3 3 0 0 1 5.6-1.5l1.4 2.4 1.4-2.4A3 3 0 0 1 21 11.5V15" fill="none" stroke="#fff" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
-        <circle cx="21" cy="19.5" r="2" fill="#fff" />
-      </svg>
-      <span className="text-[19px] leading-none">masar</span>
-    </span>
-  );
-}
+export { Logo } from "./brand";
 
 const TONE: Record<Tone, string> = {
   neutral: "bg-paper text-ink-2 ring-line",

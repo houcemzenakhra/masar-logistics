@@ -37,9 +37,16 @@ class AuthController extends AsyncNotifier<User?> {
     }
   }
 
-  Future<void> signIn(String email, String password) async {
+  /// Signs in. When the account has two-step sign-in, asks [askCode] for the code from the
+  /// authenticator app (or a recovery code); null means the person gave up.
+  Future<void> signIn(String email, String password, {Future<String?> Function()? askCode}) async {
     final api = ref.read(apiProvider);
-    final res = await api.post('/auth/login', {'email': email.trim(), 'password': password});
+    var res = await api.post('/auth/login', {'email': email.trim(), 'password': password});
+    if (res['twoStepRequired'] == true) {
+      final code = askCode == null ? null : await askCode();
+      if (code == null || code.trim().isEmpty) return;
+      res = await api.post('/auth/two-step', {'challenge': res['challenge'], 'code': code.trim()});
+    }
     final user = User.fromJson(res['user'] as Map<String, dynamic>);
     api.token = res['token'] as String;
     await _storage.write(key: _tokenKey, value: api.token);

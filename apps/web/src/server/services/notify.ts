@@ -35,6 +35,11 @@ const TEXTS = {
     fr: ["Livré", "{tracking} pour {name} a été livré. {amount} DA ajoutés à votre solde."],
     ar: ["تم التسليم", "تم تسليم {tracking} إلى {name}. أضيف {amount} دج إلى رصيدك."],
   },
+  alert: {
+    en: ["Needs attention", "{what}: {n}. See Settings, System health."],
+    fr: ["À vérifier", "{what} : {n}. Voir Réglages, État du système."],
+    ar: ["يحتاج إلى انتباه", "{what}: {n}. راجع الإعدادات، حالة النظام."],
+  },
   shortage: {
     en: ["Bag check: something is off", "Bag {code}: {missing} missing, {extra} found that belong elsewhere."],
     fr: ["Contrôle de sac : écart", "Sac {code} : {missing} manquant(s), {extra} trouvé(s) qui n'y étaient pas."],

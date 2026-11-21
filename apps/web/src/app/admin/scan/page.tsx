@@ -3,7 +3,7 @@ import { ActionForm, Submit } from "@/components/forms";
 import { ParcelTable } from "@/components/parcel-table";
 import { Card, CardHeader, Input, PageHeader } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listParcels } from "@/server/services/parcels";
 
@@ -21,7 +21,7 @@ function Station({ direction, title, hint }: { direction: "in" | "out"; title: s
 }
 
 export default async function Scan() {
-  await requireRole("admin", "hub");
+  await requireStaff("dispatch", "hub");
   const db = await getDb();
   const [incoming, floor] = await Promise.all([
     listParcels(db, { status: ["picked_up", "in_transit", "return_initiated"] }),

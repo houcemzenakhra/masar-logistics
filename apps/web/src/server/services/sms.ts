@@ -1,3 +1,4 @@
+import { brandSms, getBrand } from "./brand";
 import { and, desc, eq, inArray, lt, or, sql } from "drizzle-orm";
 import type { Q } from "../db";
 import { PARCEL_KINDS, renderParcelSms as renderText, renderResetSms, segments, type Lang, type ParcelKind, type ParcelVars } from "../domain/sms-text";
@@ -98,7 +99,7 @@ export async function queueParcelSms(q: Q, parcelId: string, kind: ParcelKind) {
   // One message per parcel, kind and delivery attempt, however often the event is replayed.
   const [m] = await q
     .insert(smsMessages)
-    .values({ to, body, kind, channel: cfg.channel ?? "sms", parcelId: p.id, dedupeKey: `${p.id}:${kind}:${p.attempts}` })
+    .values({ to, body: brandSms(body, await getBrand(q)), kind, channel: cfg.channel ?? "sms", parcelId: p.id, dedupeKey: `${p.id}:${kind}:${p.attempts}` })
     .onConflictDoNothing({ target: smsMessages.dedupeKey })
     .returning();
   return m ?? null;

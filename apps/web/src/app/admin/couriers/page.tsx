@@ -3,13 +3,13 @@ import { handoverAction, optimiseRouteAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, Input, Money, PageHeader, Table, Td } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers } from "@/server/services/directory";
 import { balancesByPrefix } from "@/server/services/ledger";
 
 export default async function Couriers() {
-  await requireRole("admin");
+  await requireStaff("dispatch");
   const db = await getDb();
   const [couriers, cash] = await Promise.all([listCouriers(db), balancesByPrefix(db, "courier")]);
   return (

@@ -490,4 +490,8 @@ const fr = <String, String>{
   "Thursday": "Jeudi",
   "Friday": "Vendredi",
   "Saturday": "Samedi",
+  "Enter your code": "Saisissez votre code",
+  "Lost your phone? Enter one of your recovery codes instead.": "Téléphone perdu ? Saisissez plutôt un de vos codes de secours.",
+  "Open your authenticator app and enter the 6-digit code for this account.": "Ouvrez votre application d'authentification et saisissez le code à 6 chiffres de ce compte.",
+  "That code is not right": "Ce code n'est pas bon",
 };

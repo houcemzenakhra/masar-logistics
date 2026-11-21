@@ -1,5 +1,6 @@
 import { and, eq, inArray, ne, sql } from "drizzle-orm";
 import { hashPassword } from "../auth";
+import type { StaffRole } from "@/lib/staff";
 import type { Q } from "../db";
 import { hubs, parcels, users } from "../schema";
 import { notify } from "./notify";
@@ -75,7 +76,7 @@ export async function autoAssign(q: Q, mode: "pickup" | "delivery", actor: Actor
   });
 }
 
-export async function createStaff(q: Q, a: { name: string; email: string; phone: string; role: "admin" | "hub" | "courier"; hubId?: string; password: string }) {
+export async function createStaff(q: Q, a: { name: string; email: string; phone: string; role: "admin" | "hub" | "courier"; staffRole?: StaffRole; hubId?: string; password: string }) {
   const email = a.email.trim().toLowerCase();
   const [taken] = await q.select({ id: users.id }).from(users).where(eq(users.email, email));
   if (taken) throw new DomainError("An account with this email already exists");
@@ -85,8 +86,14 @@ export async function createStaff(q: Q, a: { name: string; email: string; phone:
   }
   const [u] = await q
     .insert(users)
-    .values({ name: a.name.trim(), email, phone: a.phone.trim(), role: a.role, hubId: a.role === "admin" ? null : a.hubId, passwordHash: await hashPassword(a.password) })
+    .values({ name: a.name.trim(), email, phone: a.phone.trim(), role: a.role, staffRole: a.role === "admin" ? (a.staffRole ?? "owner") : "owner", hubId: a.role === "admin" ? null : a.hubId, passwordHash: await hashPassword(a.password) })
     .returning();
+  return u;
+}
+
+export async function setStaffRole(q: Q, userId: string, staffRole: StaffRole) {
+  const [u] = await q.update(users).set({ staffRole }).where(and(eq(users.id, userId), eq(users.role, "admin"))).returning();
+  if (!u) throw new DomainError("Only operations accounts have a staff role");
   return u;
 }
 
@@ -104,7 +111,7 @@ export async function setUserActive(q: Q, a: { userId: string; active: boolean; 
 
 export const listStaff = (q: Q) =>
   q
-    .select({ id: users.id, name: users.name, email: users.email, phone: users.phone, role: users.role, active: users.active, hub: hubs.name })
+    .select({ id: users.id, name: users.name, email: users.email, phone: users.phone, role: users.role, staffRole: users.staffRole, twoStep: users.totpEnabledAt, active: users.active, hub: hubs.name })
     .from(users)
     .leftJoin(hubs, eq(users.hubId, hubs.id))
     .where(inArray(users.role, ["admin", "hub", "courier"]))

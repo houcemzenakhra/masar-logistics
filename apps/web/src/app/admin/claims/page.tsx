@@ -2,7 +2,7 @@ import Link from "next/link";
 import { ClaimTable } from "@/components/claims";
 import { Card, PageHeader } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listClaims } from "@/server/services/claims";
 
@@ -11,7 +11,7 @@ export const metadata = { title: "Claims" };
 const TABS = [["open", "Under review"], ["approved", "Approved"], ["rejected", "Declined"]] as const;
 
 export default async function Claims({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
-  await requireRole("admin");
+  await requireStaff("claims");
   const asked = (await searchParams).status;
   const status = TABS.find(([k]) => k === asked)?.[0] ?? "open";
   const rows = await listClaims(await getDb(), { status });

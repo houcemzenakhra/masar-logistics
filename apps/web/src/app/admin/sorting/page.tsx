@@ -4,7 +4,7 @@ import { createZoneAction, deleteZoneAction, suggestZonesAction } from "@/app/ac
 import { ActionForm, Submit } from "@/components/forms";
 import { Card, CardHeader, Field, Input, PageHeader } from "@/components/ui";
 import { place, t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { communes, wilayas } from "@/server/schema";
 import { listHubs } from "@/server/services/directory";
@@ -15,7 +15,7 @@ import { listZones } from "@/server/services/sorting";
  * the scanner knows where to put it without reading the label.
  */
 export default async function Sorting({ searchParams }: { searchParams: Promise<{ hub?: string }> }) {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   const db = await getDb();
   const hubs = await listHubs(db);
   const hubId = s.role === "hub" ? s.hubId! : ((await searchParams).hub ?? hubs[0]?.id);
@@ -92,7 +92,7 @@ export default async function Sorting({ searchParams }: { searchParams: Promise<
                 <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2 lg:grid-cols-4">
                   {free.map((c) => (
                     <label key={c.id} className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" name="communeIds" value={c.id} className="size-4 accent-[#ff5b24]" /> {place(c.name, c.nameAr)}
+                      <input type="checkbox" name="communeIds" value={c.id} className="size-4 accent-accent" /> {place(c.name, c.nameAr)}
                     </label>
                   ))}
                 </div>
@@ -104,12 +104,12 @@ export default async function Sorting({ searchParams }: { searchParams: Promise<
             <div className="flex flex-wrap gap-x-5 gap-y-2">
               {hubs.filter((h) => h.id !== hubId && !usedHubs.has(h.id)).map((h) => (
                 <label key={h.id} className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" name="destHubIds" value={h.id} className="size-4 accent-[#ff5b24]" /> {t(h.name)}
+                  <input type="checkbox" name="destHubIds" value={h.id} className="size-4 accent-accent" /> {t(h.name)}
                 </label>
               ))}
               {!zones.some((z) => z.desk) && (
                 <label className="flex items-center gap-2 text-sm">
-                  <input type="checkbox" name="desk" className="size-4 accent-[#ff5b24]" /> {t("Stop desk parcels")}
+                  <input type="checkbox" name="desk" className="size-4 accent-accent" /> {t("Stop desk parcels")}
                 </label>
               )}
             </div>

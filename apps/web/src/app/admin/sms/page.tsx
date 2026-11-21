@@ -5,7 +5,7 @@ import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, CardHeader, Field, Input, Notice, PageHeader, Select, Stat, Table, Td } from "@/components/ui";
 import { dateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { MAX_SEND_ATTEMPTS, PARCEL_KINDS, whatsappProvider, displayTo, getSmsSettings, listSms, provider, renderParcelSms, segments, smsStats } from "@/server/services/sms";
 
@@ -31,7 +31,7 @@ const STATUS = { queued: ["Queued", "neutral"], sending: ["Sending", "info"], se
 const SAMPLE = { tracking: "MSR004512907", merchant: "Dar El Moda", merchantPhone: "0550 12 34 56", cod: 4500, courier: "Riad", courierPhone: "0770 11 22 33", code: "4821", desk: "Masar Bab Ezzouar", deskAddress: "Cité 5 Juillet, Bab Ezzouar", hours: "9:00-18:00", days: 7 };
 
 export default async function Sms({ searchParams }: { searchParams: Promise<{ status?: string }> }) {
-  await requireRole("admin");
+  await requireStaff("messages");
   const { status } = await searchParams;
   const db = await getDb();
   const [cfg, stats, list] = await Promise.all([getSmsSettings(db), smsStats(db, 7), listSms(db, { status, limit: 100 })]);
@@ -64,8 +64,8 @@ export default async function Sms({ searchParams }: { searchParams: Promise<{ st
               <legend className="sr-only">{t("Send by")}</legend>
               <p className="text-sm font-medium">{t("Send by")}</p>
               <div className="mt-2 flex flex-wrap gap-4 text-sm">
-                <label className="flex items-center gap-2"><input type="radio" name="channel" value="sms" defaultChecked={cfg.channel !== "whatsapp"} className="accent-[#ff5b24]" /> {t("Text message")}</label>
-                <label className="flex items-center gap-2"><input type="radio" name="channel" value="whatsapp" defaultChecked={cfg.channel === "whatsapp"} className="accent-[#ff5b24]" /> {t("WhatsApp, then a text message if WhatsApp cannot reach them")}</label>
+                <label className="flex items-center gap-2"><input type="radio" name="channel" value="sms" defaultChecked={cfg.channel !== "whatsapp"} className="accent-accent" /> {t("Text message")}</label>
+                <label className="flex items-center gap-2"><input type="radio" name="channel" value="whatsapp" defaultChecked={cfg.channel === "whatsapp"} className="accent-accent" /> {t("WhatsApp, then a text message if WhatsApp cannot reach them")}</label>
               </div>
               <p className="mt-2 text-xs text-muted">{wa ? t("WhatsApp is connected.") : t("WhatsApp is not connected: messages are recorded but not sent until WHATSAPP_TOKEN and WHATSAPP_PHONE_ID are set, with an approved template named masar_update.")}</p>
             </fieldset>
@@ -76,7 +76,7 @@ export default async function Sms({ searchParams }: { searchParams: Promise<{ st
                 return (
                   <li key={k} className="p-5">
                     <label className="flex items-start gap-3">
-                      <input type="checkbox" name={k} defaultChecked={cfg.enabled[k]} className="mt-1 size-4 accent-[#ff5b24]" />
+                      <input type="checkbox" name={k} defaultChecked={cfg.enabled[k]} className="mt-1 size-4 accent-accent" />
                       <span>
                         <span className="font-medium">{t(KIND[k])}</span>
                         <span className="block text-sm text-muted">{t(WHEN[k])}</span>

@@ -73,6 +73,10 @@ with `ADMIN_EMAIL` and `ADMIN_PASSWORD` instead, and leave out the demo settings
 | `MASAR_SHOW_DEMO=1`, `MASAR_DEMO_PASSWORD` | staging | Lists the demo accounts on the sign-in page; the password is not shown |
 | `SMS_PROVIDER` and `SMS_HTTP_*` | to send SMS | See "Text messages" below |
 | `RESEND_API_KEY`, `MAIL_FROM` | optional | Also send password reset links by email |
+| `CRON_SECRET` | recommended | Lets the daily job (`/api/cron/outbox`, in `vercel.json`) send overdue messages and webhook retries and run the health alerts; also unlocks the detail of `/api/health` |
+| `FCM_SERVICE_ACCOUNT` | optional | Firebase service account JSON, to push notifications to phones |
+| `OSRM_URL` | optional | An OSRM routing server with the Algeria map. Without it, routes and expected times use straight-line estimates |
+| `WHATSAPP_TOKEN`, `WHATSAPP_PHONE_ID`, `WHATSAPP_TEMPLATE` | optional | WhatsApp Cloud API, with an approved template (default `masar_update`, body "Masar: {{1}}") in French and Arabic |
 
 ### Checks
 
@@ -203,6 +207,17 @@ SMS_FROM=Masar
 - **Audit log** (Admin → Audit log): sign-ins and failed sign-ins, sign-ups, approvals, accounts,
   password resets, cash handovers, payouts, rate changes, imports, SMS settings, and parcels marked
   lost or cancelled, with who, when and from which address. Parcel moves stay in each parcel's history.
+- **Two-step sign-in** (authenticator app, RFC 6238) with ten one-time recovery codes, set up
+  from Security in the account menu. Secrets are encrypted with a key derived from `AUTH_SECRET`;
+  a code cannot be used twice. Operations can require it for all staff (Settings → Staff sign-in)
+  and reset it for someone who lost their phone (Team).
+- **Staff roles** for operations accounts: full access, finance, dispatch, support. Each page and
+  action names its area (`src/lib/staff.ts`); the menu shows only what the role can open.
+- **Merchant API keys** are stored as SHA-256 hashes; webhooks are signed (`Masar-Signature`,
+  HMAC-SHA256 with a timestamp) and only go to public HTTPS addresses.
+- **Health**: `/api/health` answers 200 or 503 for uptime monitors; the checks (ledger balance,
+  failing messages and webhooks, parcels stuck out for delivery, payouts waiting) are on
+  Settings → System health and alert operations once a day each.
 - Standard security headers; the staging site is kept out of search engines.
 
 ### Pricing
@@ -234,11 +249,9 @@ All under `/api/v1`, JSON, `Authorization: Bearer <token>` from `POST /auth/logi
 
 ## Not built yet
 
-- Customer (recipient) app.
-- Translations in the mobile app (it is English only).
-- Bags and manifests screens in the mobile app (scanning a bag in works; packing is web only).
-- Map pins, live courier location and street-level routing.
-- KYC documents for merchants, claims and support tickets.
-- Merchant API keys and webhooks, WooCommerce and Shopify plugins.
-- A scheduled retry of failed text messages (today they are retried from Admin → Text messages).
-- The wilaya-to-hub assignment and the rates in the seed are starting values to review.
+- A recipient app (recipients use the tracking page: confirm orders, choose a day, rate).
+- App Store and Play Store releases: CI builds an Android APK and an unsigned iOS app; signing
+  needs the store accounts.
+- KYC documents for merchants.
+- Shopify and YouCan apps (orders come in through their CSV exports today); WooCommerce has a plugin.
+- The wilaya-to-hub assignment, the rates and the stop desks in the seed are starting values to review.

@@ -4,7 +4,7 @@ import { ResetLinkButton } from "@/components/reset-link";
 import { Badge, Card, CardHeader, Input, Money, PageHeader, Table, Td } from "@/components/ui";
 import { dateOnly, money } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listMerchants } from "@/server/services/directory";
 import { acct, balance, balancesByPrefix } from "@/server/services/ledger";
@@ -20,7 +20,7 @@ function StatusForm({ id, status, label, variant }: { id: string; status: "activ
 }
 
 export default async function Merchants() {
-  await requireRole("admin");
+  await requireStaff("merchants");
   const db = await getDb();
   const [merchants, bal, cash] = await Promise.all([listMerchants(db), balancesByPrefix(db, "merchant"), balance(db, acct.companyCash)]);
   const pending = merchants.filter((m) => m.status === "pending");

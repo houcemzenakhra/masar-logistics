@@ -17,7 +17,7 @@ export default async function MerchantSettings() {
         <CardHeader title={t("Order confirmation")} hint={t("Cuts refusals at the door: an order is only picked up once the recipient has said yes.")} />
         <ActionForm action={confirmOrdersSettingAction} className="space-y-4 p-5">
           <label className="flex items-start gap-3">
-            <input type="checkbox" name="confirmOrders" defaultChecked={m.confirmOrders} className="mt-0.5 size-4 shrink-0 accent-[#ff5b24]" />
+            <input type="checkbox" name="confirmOrders" defaultChecked={m.confirmOrders} className="mt-0.5 size-4 shrink-0 accent-accent" />
             <span className="text-sm">
               <span className="font-medium">{t("Ask recipients to confirm each new order")}</span>
               <span className="block text-muted">{t("They get a text message with a link to confirm or cancel. A cancelled order costs you nothing. You can also confirm an order yourself after calling them.")}</span>

@@ -1,9 +1,9 @@
 import { getDb } from "@/server/db";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { batchCsv, getBatch } from "@/server/services/money";
 
 export async function GET(_: Request, ctx: { params: Promise<{ id: string }> }) {
-  await requireRole("admin");
+  await requireStaff("finance");
   const db = await getDb();
   const b = await getBatch(db, (await ctx.params).id);
   if (!b) return new Response("Not found", { status: 404 });

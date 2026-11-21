@@ -3,13 +3,13 @@ import { KindBadge, memo } from "@/components/ledger-kind";
 import { Card, CardHeader, PageHeader, Stat, Table, Td } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers, listMerchants } from "@/server/services/directory";
 import { acct, balance, balancesByPrefix, recentTxns } from "@/server/services/ledger";
 
 export default async function Finance() {
-  await requireRole("admin");
+  await requireStaff("finance");
   const db = await getDb();
   const [lines, couriers, merchants, revenue, cash, cList, mList] = await Promise.all([
     recentTxns(db, { limit: 150 }),

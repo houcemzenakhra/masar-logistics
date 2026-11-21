@@ -6,7 +6,7 @@ import { PayoutTable } from "@/components/payouts";
 import { Badge, Card, CardHeader, Input, Money, Mono, PageHeader, Table, Td } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { acct, balance } from "@/server/services/ledger";
 import { listBatches, listPayoutRequests } from "@/server/services/money";
@@ -14,7 +14,7 @@ import { listBatches, listPayoutRequests } from "@/server/services/money";
 export const metadata = { title: "Payouts" };
 
 export default async function Payouts() {
-  await requireRole("admin");
+  await requireStaff("finance");
   const db = await getDb();
   const [waiting, batches, cash] = await Promise.all([listPayoutRequests(db, { status: ["requested"] }), listBatches(db), balance(db, acct.companyCash)]);
   const total = waiting.reduce((s, r) => s + r.amount, 0);

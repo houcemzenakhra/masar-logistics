@@ -4,7 +4,7 @@ import { ActionForm, Submit } from "@/components/forms";
 import { ParcelTable } from "@/components/parcel-table";
 import { Card, CardHeader, PageHeader, Select } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers } from "@/server/services/directory";
 import { dayName } from "@/lib/format";
@@ -40,7 +40,7 @@ function Board({ title, hint, mode, rows, couriers }: { title: string; hint: str
 }
 
 export default async function Dispatch() {
-  await requireRole("admin", "hub");
+  await requireStaff("dispatch", "hub");
   const db = await getDb();
   const today = algeriaToday();
   const [created, due, atHub, all, booked] = await Promise.all([

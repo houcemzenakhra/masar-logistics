@@ -490,4 +490,8 @@ const ar = <String, String>{
   "Thursday": "الخميس",
   "Friday": "الجمعة",
   "Saturday": "السبت",
+  "Enter your code": "أدخل رمزك",
+  "Lost your phone? Enter one of your recovery codes instead.": "فقدت هاتفك؟ أدخل أحد رموز الاسترداد بدلاً منه.",
+  "Open your authenticator app and enter the 6-digit code for this account.": "افتح تطبيق المصادقة وأدخل الرمز المكوّن من 6 أرقام لهذا الحساب.",
+  "That code is not right": "هذا الرمز غير صحيح",
 };

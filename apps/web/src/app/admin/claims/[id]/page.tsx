@@ -7,12 +7,12 @@ import { ActionForm, Submit } from "@/components/forms";
 import { Card, CardHeader, Field, Input } from "@/components/ui";
 import { money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getClaim } from "@/server/services/claims";
 
 export default async function AdminClaim({ params }: { params: Promise<{ id: string }> }) {
-  await requireRole("admin");
+  await requireStaff("claims");
   const c = await getClaim(await getDb(), (await params).id);
   if (!c) notFound();
   return (

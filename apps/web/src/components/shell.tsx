@@ -2,6 +2,7 @@ import { LogOut } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 import { logoutAction } from "@/app/actions";
+import { STAFF_LABEL } from "@/lib/staff";
 import { t } from "@/lib/i18n";
 import type { Session } from "@/server/auth";
 import { LocaleSwitcher } from "./locale-switcher";
@@ -34,7 +35,11 @@ export function Shell({ session, items, children }: { session: Session; items: N
           <div className="mt-3 flex items-center justify-between gap-3">
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{session.name}</p>
-              <p className="text-xs text-white/50">{t(ROLE[session.role])}</p>
+              <p className="text-xs text-white/50">
+                {t(session.role === "admin" && session.staffRole && session.staffRole !== "owner" ? STAFF_LABEL[session.staffRole] : ROLE[session.role])}
+                {" · "}
+                <Link href="/account/security" className="underline-offset-2 hover:text-white hover:underline">{t("Security")}</Link>
+              </p>
             </div>
             {signOut}
           </div>

@@ -3,7 +3,7 @@ import { PrintButton } from "@/components/print-button";
 import { Logo } from "@/components/ui";
 import { money } from "@/lib/format";
 import { initLocale, t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { monthlyStatement } from "@/server/services/money";
 
@@ -12,7 +12,7 @@ export const metadata = { title: "Monthly statement" };
 /** A merchant's month on one printable page: services invoiced, cash collected, payouts, balance. */
 export default async function Statement({ params }: { params: Promise<{ merchantId: string; month: string }> }) {
   await initLocale();
-  const s = await requireRole("admin", "merchant");
+  const s = await requireStaff("finance", "merchant");
   const { merchantId, month } = await params;
   if (s.role === "merchant" && s.merchantId !== merchantId) notFound();
   if (!/^\d{4}-\d{2}$/.test(month)) notFound();

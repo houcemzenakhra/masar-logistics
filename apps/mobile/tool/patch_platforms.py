@@ -82,4 +82,20 @@ if plist.exists():
     p = re.sub(r"(<key>CFBundleDisplayName</key>\s*<string>)[^<]*(</string>)", r"\1Masar\2", p)
     plist.write_text(p)
 
+# The camera scanner and Firebase need a recent iOS. The Podfile exists once Flutter has
+# configured the iOS build (`flutter build ios --config-only`), so run this script again after.
+IOS_MIN = "15.5"
+podfile = root / "ios/Podfile"
+if podfile.exists():
+    t = podfile.read_text()
+    t2 = re.sub(r"^#?\s*platform :ios, '[\d.]+'", f"platform :ios, '{IOS_MIN}'", t, flags=re.M)
+    if t2 != t:
+        podfile.write_text(t2)
+pbx = root / "ios/Runner.xcodeproj/project.pbxproj"
+if pbx.exists():
+    t = pbx.read_text()
+    t2 = re.sub(r"IPHONEOS_DEPLOYMENT_TARGET = [\d.]+;", f"IPHONEOS_DEPLOYMENT_TARGET = {IOS_MIN};", t)
+    if t2 != t:
+        pbx.write_text(t2)
+
 print("Platforms patched.")

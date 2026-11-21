@@ -8,13 +8,13 @@ import { ParcelTable } from "@/components/parcel-table";
 import { Card, CardHeader, Input, Money, Mono, Stat, StatusBadge, Table, Td } from "@/components/ui";
 import { money } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { bagReport, getBag } from "@/server/services/linehaul";
 import { listParcels } from "@/server/services/parcels";
 
 export default async function Bag({ params }: { params: Promise<{ id: string }> }) {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   const db = await getDb();
   const bag = await getBag(db, (await params).id);
   if (!bag) notFound();

@@ -69,6 +69,15 @@ export const users = pgTable("users", {
   phone: text("phone").notNull().default(""),
   passwordHash: text("password_hash").notNull(),
   role: text("role", { enum: ["admin", "hub", "courier", "merchant"] }).notNull(),
+  /** For operations staff: which parts of operations they work in. `owner` sees everything. */
+  staffRole: text("staff_role", { enum: ["owner", "finance", "dispatch", "support"] }).notNull().default("owner"),
+  /** Authenticator app secret, encrypted. Set while enrolling; active once `totpEnabledAt` is set. */
+  totpSecret: text("totp_secret"),
+  totpEnabledAt: timestamp("totp_enabled_at", { withTimezone: true }),
+  /** Last 30-second step accepted, so one code cannot be used twice. */
+  totpLastStep: integer("totp_last_step"),
+  /** SHA-256 of unused recovery codes. */
+  recoveryCodes: jsonb("recovery_codes").$type<string[]>().notNull().default([]),
   hubId: text("hub_id").references(() => hubs.id),
   merchantId: text("merchant_id").references(() => merchants.id),
   active: boolean("active").notNull().default(true),

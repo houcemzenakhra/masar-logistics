@@ -161,7 +161,7 @@ function HandOver({ p, session }: { p: Parcel; session: Session }) {
         <details className="rounded-xl bg-paper p-4 ring-1 ring-inset ring-line sm:col-span-2">
           <summary className="cursor-pointer text-sm font-medium">{t("The recipient keeps only part of the order")}</summary>
           <label className="mt-3 flex items-center gap-2 text-sm">
-            <input type="checkbox" name="partial" className="size-4 accent-[#ff5b24]" /> {t("Partial delivery")}
+            <input type="checkbox" name="partial" className="size-4 accent-accent" /> {t("Partial delivery")}
           </label>
           <div className="mt-3 grid gap-3 sm:grid-cols-2">
             <Field label={t("Cash collected (DZD)")}><Input name="collected" inputMode="numeric" dir="ltr" className="tnum" /></Field>

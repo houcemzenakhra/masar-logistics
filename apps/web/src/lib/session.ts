@@ -6,6 +6,8 @@ import { HOME, SESSION_COOKIE, verifySession, type Session } from "@/server/auth
 import type { Role } from "@/server/domain/state";
 import { getDb } from "@/server/db";
 import { looksLikeApiKey, verifyApiKey } from "@/server/services/integrations";
+import { getSecurityPolicy } from "@/server/services/twostep";
+import { canUse, type Area } from "./staff";
 
 // One database check per request, however many components ask for the session.
 const cookieSession = cache(async () => verifySession((await cookies()).get(SESSION_COOKIE)?.value));
@@ -34,6 +36,31 @@ export async function requireRole(...roles: Role[]): Promise<Session> {
   const s = await getSession();
   if (!s) redirect("/login");
   if (!roles.includes(s.role)) redirect(HOME[s.role]);
+  await requireTwoStepIfStaff(s);
+  return s;
+}
+
+/** When operations require it, staff without two-step sign-in go to turn it on first. */
+async function requireTwoStepIfStaff(s: Session) {
+  if ((s.role !== "admin" && s.role !== "hub") || s.twoStep) return;
+  if ((await getSecurityPolicy(await getDb())).requireStaff2fa) redirect("/account/security?required=1");
+}
+
+/**
+ * An operations page or action in one area. Staff with a narrower role (finance, dispatch,
+ * support) are sent back to the overview for areas outside theirs; `others` lets hub or other
+ * roles in too, as with requireRole.
+ */
+export async function requireStaff(area: Area, ...others: Role[]): Promise<Session> {
+  const s = await requireRole("admin", ...others);
+  if (s.role === "admin" && !canUse(s.staffRole, area)) redirect(`/admin?denied=${area}`);
+  return s;
+}
+
+/** Any signed-in account, before the two-step rule: the page where people turn it on. */
+export async function requireSignedIn(): Promise<Session> {
+  const s = await getSession();
+  if (!s) redirect("/login");
   return s;
 }
 

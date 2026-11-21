@@ -2,7 +2,7 @@ import Link from "next/link";
 import { Card, PageHeader, Table, Td } from "@/components/ui";
 import { dateTime, money } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { auditActions, listAudit } from "@/server/services/security";
 
@@ -43,7 +43,7 @@ function details(action: string, d: Record<string, unknown>) {
 }
 
 export default async function Audit({ searchParams }: { searchParams: Promise<{ action?: string }> }) {
-  await requireRole("admin");
+  await requireStaff("settings");
   const { action } = await searchParams;
   const db = await getDb();
   const [rows, actions] = await Promise.all([listAudit(db, { action, limit: 300 }), auditActions(db)]);

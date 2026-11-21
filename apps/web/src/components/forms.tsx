@@ -12,6 +12,8 @@ export type FormState =
       secret?: string;
       /** Shown large, to read from a distance: the sorting lane after a scan. */
       big?: string;
+      /** Recovery codes, shown once in a grid. */
+      codes?: string[];
     }
   | undefined;
 type Action = (prev: FormState, fd: FormData) => Promise<FormState>;
@@ -45,6 +47,14 @@ export function ActionForm({ action, className, children }: { action: Action; cl
         </p>
       )}
       {state?.secret && <SecretBox value={state.secret} />}
+      {state?.codes && (
+        <div className="mt-2 basis-full rounded-xl bg-navy p-4 text-white">
+          <ul dir="ltr" className="grid grid-cols-2 gap-x-6 gap-y-1.5 font-mono text-[15px] sm:grid-cols-5">
+            {state.codes.map((c) => <li key={c}>{c}</li>)}
+          </ul>
+          <SecretBox value={state.codes.join("\n")} />
+        </div>
+      )}
       {state?.big && (
         <p aria-live="polite" className="mt-2 basis-full rounded-xl bg-navy px-4 py-3 text-center font-mono text-4xl font-bold tracking-wide text-white">
           {state.big}

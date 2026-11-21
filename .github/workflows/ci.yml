@@ -70,3 +70,40 @@ jobs:
             !apps/mobile/android/app/build
             !apps/mobile/ios/Pods
           retention-days: 7
+
+  ios:
+    # An unsigned iOS build: proves the app compiles for iPhone. Signing for TestFlight or the
+    # App Store needs an Apple developer account and certificates, added as secrets later.
+    runs-on: macos-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: apps/mobile
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: iOS project
+        run: bash tool/setup_platforms.sh
+      - run: flutter pub get
+      - name: Configure, then set the minimum iOS version in the generated Podfile
+        run: |
+          flutter build ios --config-only --no-codesign
+          python3 tool/patch_platforms.py
+      - name: Build the iOS app (unsigned)
+        run: >
+          flutter build ios --release --no-codesign
+          --dart-define=API_BASE=${{ vars.MASAR_API_BASE || 'https://masar-staging-seven.vercel.app' }}
+          --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_IOS_APP_ID || secrets.FIREBASE_APP_ID }}
+          --dart-define=FIREBASE_SENDER_ID=${{ secrets.FIREBASE_SENDER_ID }}
+          --dart-define=FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
+      - name: Package Runner.app
+        run: cd build/ios/iphoneos && zip -qr masar-ios-unsigned.zip Runner.app
+      - uses: actions/upload-artifact@v4
+        with:
+          name: masar-ios-unsigned
+          path: apps/mobile/build/ios/iphoneos/masar-ios-unsigned.zip
+          retention-days: 14

@@ -108,7 +108,7 @@ export function DestinationFields({ wilayas, deskDiscount }: { wilayas: Place[];
 export function OrderOptions() {
   const t = useT();
   const [exchange, setExchange] = useState(false);
-  const box = "mt-0.5 size-4 shrink-0 accent-[#ff5b24]";
+  const box = "mt-0.5 size-4 shrink-0 accent-accent";
   return (
     <fieldset className="grid gap-3 rounded-xl bg-paper p-4 ring-1 ring-inset ring-line sm:col-span-2">
       <legend className="sr-only">{t("Options")}</legend>

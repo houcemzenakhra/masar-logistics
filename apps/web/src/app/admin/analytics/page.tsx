@@ -1,12 +1,12 @@
 import { CourierTable, Kpis, MerchantTable, PeriodChips, Reasons, Trend, WilayaTable } from "@/components/analytics";
 import { PageHeader } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { PERIODS, byCourier, byMerchant, byWilaya, daily, failureReasons, overview, type Period } from "@/server/services/analytics";
 
 export default async function Analytics({ searchParams }: { searchParams: Promise<{ days?: string }> }) {
-  await requireRole("admin");
+  await requireStaff("analytics");
   const asked = Number((await searchParams).days);
   const period: Period = (PERIODS as readonly number[]).includes(asked) ? (asked as Period) : 30;
   const db = await getDb();

@@ -2,7 +2,7 @@ import { pricingSettingsAction, updateTierAction } from "@/app/actions";
 import { ActionForm, Submit } from "@/components/forms";
 import { Card, Field, Input, PageHeader } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { INCLUDED_KG } from "@/server/domain/pricing";
 import { getPricingSettings, getTiers } from "@/server/services/parcels";
@@ -15,7 +15,7 @@ const WHEN = {
 };
 
 export default async function Pricing() {
-  await requireRole("admin");
+  await requireStaff("settings");
   const db = await getDb();
   const [tiers, cfg] = await Promise.all([getTiers(db), getPricingSettings(db)]);
   return (

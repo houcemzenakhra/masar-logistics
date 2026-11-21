@@ -9,14 +9,17 @@ import type { FormState } from "@/components/forms";
 import { LOCALES, LOCALE_COOKIE, type Locale } from "@/i18n/config";
 import { getT, locale } from "@/lib/i18n";
 import { kickSms } from "@/lib/kick";
-import { baseUrl, clientIp, requireRole } from "@/lib/session";
+import { baseUrl, clientIp, requireRole, requireSignedIn, requireStaff } from "@/lib/session";
+import { STAFF_ROLES } from "@/lib/staff";
+import { BrandError, getBrand, setBrand } from "@/server/services/brand";
+import { checkSecondFactor, confirmEnrollment, disableTwoStep, getSecurityPolicy, newRecoveryCodesFor, resetTwoStep, setSecurityPolicy, startEnrollment, SecurityError } from "@/server/services/twostep";
 import { RECIPIENT_COOKIE, recipientParcelId } from "@/lib/recipient";
-import { COOKIE_OPTS, HOME, SESSION_COOKIE, login, signGrant, type Session } from "@/server/auth";
+import { COOKIE_OPTS, HOME, SESSION_COOKIE, TWO_STEP_COOKIE, login, sessionFor, signGrant, verifyGrant, type Session } from "@/server/auth";
 import { getDb } from "@/server/db";
 import { STATUSES, type Status } from "@/server/domain/state";
 import { maskPhone, normalizeMobile } from "@/server/phone";
 import { rateTiers, users } from "@/server/schema";
-import { assign, autoAssign, createStaff, setUserActive } from "@/server/services/dispatch";
+import { assign, autoAssign, createStaff, setStaffRole, setUserActive } from "@/server/services/dispatch";
 import { handover, payout } from "@/server/services/ledger";
 import { checkBagParcel, finishBagCheck, addBagsToManifest, addToBag, createBag, createManifest, departManifest, receiveBag, removeBagFromManifest, removeFromBag, sealBag } from "@/server/services/linehaul";
 import { ImportHeaderError, commitBatch, discardBatch, stageImport } from "@/server/services/imports";
@@ -45,7 +48,7 @@ async function guard(fn: (t: Awaited<ReturnType<typeof getT>>) => Promise<FormSt
     return (await fn(t)) ?? {};
   } catch (e) {
     if (e instanceof z.ZodError) return { error: t(e.issues[0].message) };
-    if (e instanceof DomainError || e instanceof DeskError || e instanceof IntegrationError || e instanceof PickupError || e instanceof SortingError) return { error: t(e.message) };
+    if (e instanceof DomainError || e instanceof DeskError || e instanceof IntegrationError || e instanceof PickupError || e instanceof SortingError || e instanceof SecurityError || e instanceof BrandError) return { error: t(e.message) };
     if (e instanceof Error && /only holds|is owed|available to pay|positive whole/.test(e.message)) return { error: t(e.message) };
     throw e;
   }
@@ -89,9 +92,93 @@ export async function loginAction(_: FormState, fd: FormData): Promise<FormState
     return { error: t("Wrong email or password.") };
   }
   await clearLimit(db, LIMITS.loginAccount(email).key);
+  if (res.session.twoStep) {
+    // Right password; the code from the app comes next. No session until then.
+    (await cookies()).set(TWO_STEP_COOKIE, await signGrant("2step", res.session.userId, 300), { ...COOKIE_OPTS, maxAge: 300 });
+    redirect("/login/verify");
+  }
   await audit(db, { actor: { userId: res.session.userId, name: res.session.name }, action: "login", entity: "user", entityId: res.session.userId, ip });
   (await cookies()).set(SESSION_COOKIE, res.token, COOKIE_OPTS);
   redirect(HOME[res.session.role]);
+}
+
+export async function verifyTwoStepAction(_: FormState, fd: FormData): Promise<FormState> {
+  const t = await getT();
+  const jar = await cookies();
+  const userId = await verifyGrant(jar.get(TWO_STEP_COOKIE)?.value, "2step");
+  if (!userId) return { error: t("This sign-in took too long. Enter your password again.") };
+  const db = await getDb();
+  const ip = await clientIp();
+  const limits = [LIMITS.loginAccount(`2step:${userId}`), LIMITS.loginIp(ip)];
+  const limit = await checkLimit(db, limits);
+  if (!limit.ok) return tooMany(t, limit.retryAfter);
+  if (!(await checkSecondFactor(db, userId, str(fd, "code")))) {
+    const after = await rateLimit(db, limits);
+    if (!after.ok) return tooMany(t, after.retryAfter);
+    await audit(db, { actor: null, action: "login.2step_failed", entity: "user", entityId: userId, ip });
+    return { error: t("That code is not right. Use the newest code from your app, or a recovery code.") };
+  }
+  await clearLimit(db, LIMITS.loginAccount(`2step:${userId}`).key);
+  const res = await sessionFor(userId);
+  if (!res) return { error: t("This account cannot sign in.") };
+  await audit(db, { actor: { userId, name: res.session.name }, action: "login", entity: "user", entityId: userId, details: { twoStep: true }, ip });
+  jar.delete(TWO_STEP_COOKIE);
+  jar.set(SESSION_COOKIE, res.token, COOKIE_OPTS);
+  redirect(HOME[res.session.role]);
+}
+
+// ---------- account security ----------
+
+export async function startTwoStepAction(): Promise<FormState> {
+  const s = await requireSignedIn();
+  await startEnrollment(await getDb(), s.userId, (await getBrand(await getDb())).name);
+  refresh();
+  return undefined;
+}
+
+export async function confirmTwoStepAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireSignedIn();
+  return guard(async (t) => {
+    const codes = await confirmEnrollment(await getDb(), s.userId, str(fd, "code"));
+    await log(s, "account.2step_on", "user", s.userId);
+    // Other devices were signed out; this one gets a fresh session.
+    const res = await sessionFor(s.userId);
+    if (res) (await cookies()).set(SESSION_COOKIE, res.token, COOKIE_OPTS);
+    refresh();
+    return { ok: t("Two-step sign-in is on. Keep these recovery codes somewhere safe: each works once if you lose your phone."), codes };
+  });
+}
+
+export async function disableTwoStepAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireSignedIn();
+  return guard(async (t) => {
+    if ((s.role === "admin" || s.role === "hub") && (await getSecurityPolicy(await getDb())).requireStaff2fa) throw new DomainError("Operations require two-step sign-in for staff");
+    await disableTwoStep(await getDb(), s.userId, str(fd, "code"));
+    await log(s, "account.2step_off", "user", s.userId);
+    refresh();
+    return { ok: t("Two-step sign-in is off.") };
+  });
+}
+
+export async function recoveryCodesAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireSignedIn();
+  return guard(async (t) => {
+    const codes = await newRecoveryCodesFor(await getDb(), s.userId, str(fd, "code"));
+    await log(s, "account.recovery_codes", "user", s.userId);
+    return { ok: t("New recovery codes. The old ones no longer work."), codes };
+  });
+}
+
+export async function securityPolicyAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireStaff("settings");
+  return guard(async (t) => {
+    const requireStaff2fa = fd.get("requireStaff2fa") === "on";
+    if (requireStaff2fa && !s.twoStep) throw new DomainError("Turn on two-step sign-in for your own account first");
+    await setSecurityPolicy(await getDb(), { requireStaff2fa });
+    await log(s, "settings.security", "settings", "security", { requireStaff2fa });
+    refresh();
+    return { ok: t("Saved.") };
+  });
 }
 
 export async function logoutAction() {
@@ -163,7 +250,7 @@ export async function resetAction(_: FormState, fd: FormData): Promise<FormState
 
 /** An admin makes a reset link for someone who cannot receive it, e.g. to send by WhatsApp. */
 export async function resetLinkAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const db = await getDb();
     const [u] = await db.select().from(users).where(eq(users.id, str(fd, "userId")));
@@ -179,7 +266,7 @@ export async function resetLinkAction(_: FormState, fd: FormData): Promise<FormS
 }
 
 export async function merchantStatusAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("merchants");
   return guard(async () => {
     const status = fd.get("status") === "suspended" ? "suspended" : "active";
     const m = await setMerchantStatus(await getDb(), str(fd, "merchantId"), status);
@@ -193,12 +280,13 @@ const Staff = z.object({
   email: z.string().trim().email("Enter a valid email address"),
   phone: z.string().trim(),
   role: z.enum(["admin", "hub", "courier"]),
+  staffRole: z.enum(STAFF_ROLES).default("owner"),
   hubId: z.string().optional(),
   password: z.string().min(8, "Use at least 8 characters for the password"),
 });
 
 export async function createStaffAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const input = Staff.parse(Object.fromEntries(fd));
     const u = await createStaff(await getDb(), { ...input, phone: normalizeMobile(input.phone) ?? input.phone });
@@ -208,8 +296,32 @@ export async function createStaffAction(_: FormState, fd: FormData): Promise<For
   });
 }
 
+export async function staffRoleAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireStaff("settings");
+  return guard(async (t) => {
+    const staffRole = z.enum(STAFF_ROLES).parse(str(fd, "staffRole"));
+    const userId = str(fd, "userId");
+    if (userId === s.userId && staffRole !== "owner") throw new DomainError("You cannot narrow your own access");
+    await setStaffRole(await getDb(), userId, staffRole);
+    await log(s, "staff.role", "user", userId, { staffRole });
+    refresh();
+    return { ok: t("Saved.") };
+  });
+}
+
+export async function resetTwoStepAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireStaff("settings");
+  return guard(async (t) => {
+    const userId = str(fd, "userId");
+    await resetTwoStep(await getDb(), userId);
+    await log(s, "staff.reset_2fa", "user", userId);
+    refresh();
+    return { ok: t("Two-step sign-in is off for this account. They are signed out and can set it up again.") };
+  });
+}
+
 export async function staffActiveAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async () => {
     const active = fd.get("active") === "1";
     await setUserActive(await getDb(), { userId: str(fd, "userId"), active, by: s.userId });
@@ -250,7 +362,7 @@ const NewParcel = z.discriminatedUnion("deliveryType", [
 ]);
 
 export async function createParcelAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("merchant", "admin");
+  const s = await requireStaff("parcels", "merchant");
   let id = "";
   const res = await guard(async () => {
     const input = NewParcel.parse({ deliveryType: "home", ...Object.fromEntries(fd) });
@@ -268,7 +380,7 @@ export async function createParcelAction(_: FormState, fd: FormData): Promise<Fo
 }
 
 export async function transitionAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub", "courier", "merchant");
+  const s = await requireStaff("parcels", "hub", "courier", "merchant");
   return guard(async () => {
     const to = str(fd, "to") as Status;
     if (!STATUSES.includes(to)) throw new DomainError("Unknown status");
@@ -293,7 +405,7 @@ export async function transitionAction(_: FormState, fd: FormData): Promise<Form
 // ---------- dispatch ----------
 
 export async function assignAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   return guard(async (t) => {
     const mode = fd.get("mode") === "pickup" ? "pickup" : "delivery";
     const db = await getDb();
@@ -312,7 +424,7 @@ export async function assignAction(_: FormState, fd: FormData): Promise<FormStat
 }
 
 export async function optimiseRouteAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("courier", "admin", "hub");
+  const s = await requireStaff("dispatch", "courier", "hub");
   return guard(async (t) => {
     const r = await optimiseCourierRoute(await getDb(), s.role === "courier" ? s.userId : str(fd, "courierId"));
     refresh();
@@ -324,7 +436,7 @@ export async function optimiseRouteAction(_: FormState, fd: FormData): Promise<F
 // ---------- hub ----------
 
 export async function hubScanAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("hub", "admin");
+  const s = await requireStaff("dispatch", "hub");
   return guard(async (t) => {
     const db = await getDb();
     const code = str(fd, "tracking").trim().toUpperCase();
@@ -350,7 +462,7 @@ export async function hubScanAction(_: FormState, fd: FormData): Promise<FormSta
 const STATUS_TEXT: Partial<Record<Status, string>> = { at_origin_hub: "At origin hub", at_destination_hub: "At destination hub", in_transit: "In transit", returned: "Returned to merchant" };
 
 export async function bagAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("hub", "admin");
+  const s = await requireStaff("dispatch", "hub");
   const op = str(fd, "op");
   let go = "";
   const res = await guard(async (t) => {
@@ -388,7 +500,7 @@ export async function bagAction(_: FormState, fd: FormData): Promise<FormState> 
 }
 
 export async function manifestAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("hub", "admin");
+  const s = await requireStaff("dispatch", "hub");
   const op = str(fd, "op");
   let go = "";
   const res = await guard(async (t) => {
@@ -415,7 +527,7 @@ export async function manifestAction(_: FormState, fd: FormData): Promise<FormSt
 const amount = (fd: FormData) => Number(str(fd, "amount").replace(/[\s,]/g, ""));
 
 export async function handoverAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async (t) => {
     await handover(await getDb(), { courierId: str(fd, "courierId"), amount: amount(fd), by: s.userId });
     await log(s, "ledger.handover", "user", str(fd, "courierId"), { amount: amount(fd) });
@@ -425,7 +537,7 @@ export async function handoverAction(_: FormState, fd: FormData): Promise<FormSt
 }
 
 export async function payoutAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async (t) => {
     await payout(await getDb(), { merchantId: str(fd, "merchantId"), amount: amount(fd), by: s.userId });
     await log(s, "ledger.payout", "merchant", str(fd, "merchantId"), { amount: amount(fd) });
@@ -442,7 +554,7 @@ const Tier = z.object({
 });
 
 export async function updateTierAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const tier = Tier.parse(Object.fromEntries(fd));
     const db = await getDb();
@@ -501,7 +613,7 @@ export async function importDiscardAction(_: FormState, fd: FormData): Promise<F
 // ---------- text messages ----------
 
 export async function smsSettingsAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const enabled = Object.fromEntries(PARCEL_KINDS.map((k) => [k, fd.get(k) === "on"])) as Record<(typeof PARCEL_KINDS)[number], boolean>;
     const channel = fd.get("channel") === "whatsapp" ? "whatsapp" : "sms";
@@ -513,7 +625,7 @@ export async function smsSettingsAction(_: FormState, fd: FormData): Promise<For
 }
 
 export async function smsRetryAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("messages");
   return guard(async (t) => {
     const ids = fd.getAll("ids").map(String);
     const r = await dispatch(await getDb(), { retry: true, limit: 200, ids: ids.length ? ids : undefined });
@@ -524,7 +636,7 @@ export async function smsRetryAction(_: FormState, fd: FormData): Promise<FormSt
 }
 
 export async function smsTestAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   const t = await getT();
   const db = await getDb();
   if (!(await rateLimit(db, [LIMITS.smsTest(s.userId)])).ok) return { error: t("Too many test messages. Try again later.") };
@@ -544,7 +656,7 @@ export async function smsTestAction(_: FormState, fd: FormData): Promise<FormSta
 // ---------- delivery with proof ----------
 
 export async function deliverAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("courier", "hub", "admin");
+  const s = await requireStaff("parcels", "courier", "hub");
   return guard(async () => {
     const partial = fd.get("partial") === "on";
     await deliver(await getDb(), {
@@ -564,7 +676,7 @@ export async function deliverAction(_: FormState, fd: FormData): Promise<FormSta
 // ---------- returns: confirmation, stop desks, recipient history ----------
 
 export async function confirmOrderAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("merchant", "admin");
+  const s = await requireStaff("parcels", "merchant");
   return guard(async (t) => {
     const yes = fd.get("answer") === "yes";
     await answerConfirmation(await getDb(), str(fd, "parcelId"), yes, s);
@@ -596,7 +708,7 @@ export async function confirmOrdersSettingAction(_: FormState, fd: FormData): Pr
 }
 
 export async function createDeskAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const d = await createDesk(await getDb(), {
       name: str(fd, "name"),
@@ -613,7 +725,7 @@ export async function createDeskAction(_: FormState, fd: FormData): Promise<Form
 }
 
 export async function deskActiveAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async () => {
     const active = fd.get("active") === "1";
     const d = await setDeskActive(await getDb(), str(fd, "id"), active);
@@ -623,7 +735,7 @@ export async function deskActiveAction(_: FormState, fd: FormData): Promise<Form
 }
 
 export async function returnsSettingsAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const db = await getDb();
     // Two forms post here: the stop desk discount, and the recipient history switch.
@@ -642,7 +754,7 @@ export async function returnsSettingsAction(_: FormState, fd: FormData): Promise
 }
 
 export async function deliverySettingsAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const proof = fd.get("proof") === "required" ? "required" : "optional";
     await setDeliverySettings(await getDb(), { proof });
@@ -674,7 +786,7 @@ export async function fileClaimAction(_: FormState, fd: FormData): Promise<FormS
 }
 
 export async function decideClaimAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("claims");
   return guard(async (t) => {
     const approve = fd.get("decision") === "approve";
     const c = await decideClaim(await getDb(), { claimId: str(fd, "claimId"), approve, amount: approve ? Number(str(fd, "amount")) : undefined, note: str(fd, "note") }, s);
@@ -761,7 +873,7 @@ export async function requestPayoutAction(_: FormState, fd: FormData): Promise<F
 }
 
 export async function cancelPayoutAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("merchant", "admin");
+  const s = await requireStaff("finance", "merchant");
   return guard(async () => {
     await cancelPayout(await getDb(), str(fd, "id"), s, str(fd, "note"));
     await log(s, s.role === "admin" ? "payout.rejected" : "payout.cancelled", "payout", str(fd, "id"), {});
@@ -770,7 +882,7 @@ export async function cancelPayoutAction(_: FormState, fd: FormData): Promise<Fo
 }
 
 export async function createBatchAction(): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   let id = "";
   const res = await guard(async () => {
     const b = await createBatch(await getDb(), s);
@@ -782,7 +894,7 @@ export async function createBatchAction(): Promise<FormState> {
 }
 
 export async function markBatchPaidAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async (t) => {
     const b = await markBatchPaid(await getDb(), str(fd, "batchId"), str(fd, "reference"), s);
     await log(s, "payout.batch_paid", "batch", b.id, { total: b.total, reference: b.reference });
@@ -793,7 +905,7 @@ export async function markBatchPaidAction(_: FormState, fd: FormData): Promise<F
 }
 
 export async function removeFromBatchAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async () => {
     await removeFromBatch(await getDb(), str(fd, "id"));
     await log(s, "payout.removed_from_batch", "payout", str(fd, "id"), {});
@@ -802,7 +914,7 @@ export async function removeFromBatchAction(_: FormState, fd: FormData): Promise
 }
 
 export async function receiveCashAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("finance", "hub");
   let id = "";
   const res = await guard(async () => {
     const h = await receiveCash(await getDb(), { courierId: str(fd, "courierId"), counted: amount(fd), note: str(fd, "note") }, s);
@@ -815,7 +927,7 @@ export async function receiveCashAction(_: FormState, fd: FormData): Promise<For
 }
 
 export async function resolveShortfallAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async () => {
     const how = str(fd, "how");
     if (how !== "repaid" && how !== "written_off" && how !== "deducted") throw new DomainError("Choose how the shortfall is settled");
@@ -826,7 +938,7 @@ export async function resolveShortfallAction(_: FormState, fd: FormData): Promis
 }
 
 export async function recordPayAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async (t) => {
     const r = await recordPay(await getDb(), str(fd, "month"), str(fd, "courierId"), s);
     await log(s, "courier.pay_recorded", "user", str(fd, "courierId"), { month: r.month, total: r.total });
@@ -836,7 +948,7 @@ export async function recordPayAction(_: FormState, fd: FormData): Promise<FormS
 }
 
 export async function payRatesAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("finance");
   return guard(async (t) => {
     const n = (k: string) => Number(str(fd, k));
     const v = { perDelivery: n("perDelivery"), perPickup: n("perPickup"), bonusThreshold: n("bonusThreshold"), bonus: n("bonus") };
@@ -848,7 +960,7 @@ export async function payRatesAction(_: FormState, fd: FormData): Promise<FormSt
 }
 
 export async function companyAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const v = { legalName: str(fd, "legalName"), address: str(fd, "address"), nif: str(fd, "nif"), rc: str(fd, "rc"), nis: str(fd, "nis"), ai: str(fd, "ai"), phone: str(fd, "phone"), email: str(fd, "email") };
     if (!v.legalName) throw new DomainError("Enter the company's legal name");
@@ -941,7 +1053,7 @@ export async function cancelPickupAction(_: FormState, fd: FormData): Promise<Fo
 const hubOf = (s: Session, fd: FormData) => (s.role === "hub" ? s.hubId! : str(fd, "hubId"));
 
 export async function createZoneAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   return guard(async (t) => {
     const z = await createZone(await getDb(), {
       hubId: hubOf(s, fd),
@@ -958,7 +1070,7 @@ export async function createZoneAction(_: FormState, fd: FormData): Promise<Form
 }
 
 export async function deleteZoneAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   return guard(async () => {
     const z = await deleteZone(await getDb(), hubOf(s, fd), str(fd, "id"));
     await log(s, "sorting.delete", "sort_zone", z.id, { code: z.code });
@@ -967,7 +1079,7 @@ export async function deleteZoneAction(_: FormState, fd: FormData): Promise<Form
 }
 
 export async function suggestZonesAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   return guard(async (t) => {
     const made = await suggestZones(await getDb(), hubOf(s, fd));
     await log(s, "sorting.suggest", "hub", hubOf(s, fd), { lanes: made.length });
@@ -977,7 +1089,7 @@ export async function suggestZonesAction(_: FormState, fd: FormData): Promise<Fo
 }
 
 export async function measureAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   return guard(async (t) => {
     const n = (k: string) => (str(fd, k) ? Number(str(fd, k).replace(",", ".")) : null);
     const r = await measureParcel(await getDb(), { parcelId: str(fd, "parcelId"), weightKg: n("weightKg") ?? 0, lengthCm: n("lengthCm"), widthCm: n("widthCm"), heightCm: n("heightCm") }, s);
@@ -987,12 +1099,22 @@ export async function measureAction(_: FormState, fd: FormData): Promise<FormSta
 }
 
 export async function pricingSettingsAction(_: FormState, fd: FormData): Promise<FormState> {
-  const s = await requireRole("admin");
+  const s = await requireStaff("settings");
   return guard(async (t) => {
     const divisor = Number(str(fd, "divisor"));
     await setPricingSettings(await getDb(), { divisor });
     await log(s, "settings.pricing", "settings", "pricing", { divisor });
     refresh();
     return { ok: t("Saved.") };
+  });
+}
+
+export async function brandAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireStaff("settings");
+  return guard(async (t) => {
+    const b = await setBrand(await getDb(), { name: str(fd, "name"), accent: str(fd, "accent"), supportPhone: str(fd, "supportPhone"), supportEmail: str(fd, "supportEmail") });
+    await log(s, "settings.brand", "settings", "brand", b);
+    revalidatePath("/", "layout");
+    return { ok: t("Saved. Pages and new text messages use it now.") };
   });
 }

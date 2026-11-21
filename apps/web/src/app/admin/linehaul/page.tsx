@@ -5,13 +5,13 @@ import { BagStatus, ManifestStatus, RouteLabel } from "@/components/linehaul-bit
 import { Card, CardHeader, Field, Input, Mono, PageHeader, Select, Table, Td } from "@/components/ui";
 import { dateTime } from "@/lib/format";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listHubs } from "@/server/services/directory";
 import { listBags, listManifests } from "@/server/services/linehaul";
 
 export default async function Linehaul() {
-  const s = await requireRole("admin", "hub");
+  const s = await requireStaff("dispatch", "hub");
   const db = await getDb();
   const [bags, manifests, hubs] = await Promise.all([listBags(db), listManifests(db), listHubs(db)]);
   const mine = (hubId: string) => s.role === "admin" || s.hubId === hubId;

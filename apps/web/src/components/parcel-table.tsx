@@ -45,7 +45,7 @@ export function ParcelTable({ rows, base, showMerchant = false, select = false }
             <tr key={p.id} className="hover:bg-paper/60">
               {select && (
                 <Td className="w-8 pe-0">
-                  <input type="checkbox" name="ids" value={p.id} aria-label={t("Select {x}", { x: p.tracking })} className="size-4 accent-[#ff5b24]" />
+                  <input type="checkbox" name="ids" value={p.id} aria-label={t("Select {x}", { x: p.tracking })} className="size-4 accent-accent" />
                 </Td>
               )}
               <Td>

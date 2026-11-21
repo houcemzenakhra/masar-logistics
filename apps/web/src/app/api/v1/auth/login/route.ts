@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { fail, json, route } from "@/lib/api";
 import { clientIp } from "@/lib/session";
-import { login } from "@/server/auth";
+import { login, signGrant } from "@/server/auth";
 import { getDb } from "@/server/db";
 import { LIMITS, audit, checkLimit, clearLimit, rateLimit } from "@/server/services/security";
 
@@ -21,6 +21,8 @@ export const POST = route(async (req) => {
     return fail(401, "Wrong email or password");
   }
   await clearLimit(db, LIMITS.loginAccount(email).key);
+  // Two-step sign-in: no token yet, a challenge to answer with the code at /auth/two-step.
+  if (res.session.twoStep) return json({ twoStepRequired: true, challenge: await signGrant("2step", res.session.userId, 300) });
   await audit(db, { actor: { userId: res.session.userId, name: res.session.name }, action: "login", entity: "user", entityId: res.session.userId, details: { via: "api" }, ip });
   return json({ token: res.token, user: res.session });
 });

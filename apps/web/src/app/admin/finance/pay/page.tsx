@@ -4,7 +4,7 @@ import { FinanceNav } from "@/components/finance-nav";
 import { ActionForm, Submit } from "@/components/forms";
 import { Badge, Card, CardHeader, Field, Input, Money, PageHeader, Table, Td } from "@/components/ui";
 import { t } from "@/lib/i18n";
-import { requireRole } from "@/lib/session";
+import { requireStaff } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { getPayRates, paySheet } from "@/server/services/money";
 
@@ -19,7 +19,7 @@ function months(n = 6) {
 }
 
 export default async function Pay({ searchParams }: { searchParams: Promise<{ month?: string }> }) {
-  await requireRole("admin");
+  await requireStaff("finance");
   const list = months();
   const asked = (await searchParams).month;
   const month = asked && list.includes(asked) ? asked : list[0];
