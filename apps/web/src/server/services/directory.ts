@@ -69,3 +69,41 @@ export const listMerchants = (q: Q) =>
 
 export const listCommunes = (q: Q, wilayaId: number) =>
   q.select({ id: communes.id, name: communes.name, nameAr: communes.nameAr }).from(communes).where(eq(communes.wilayaId, wilayaId)).orderBy(asc(communes.name));
+
+export type CommuneHit = { id: number; name: string; nameAr: string; wilayaId: number; wilaya: string; wilayaAr: string; zone: number; hub: string };
+
+let all: Promise<(CommuneHit & { key: string })[]> | null = null;
+
+/**
+ * Commune search for the public coverage page. Names in both scripts are matched without
+ * accents or case, so "setif", "Sétif" and "سطيف" all find Sétif. The reference list never
+ * changes at runtime, so it is loaded once per server process.
+ */
+export async function searchCommunes(q: Q, text: string, limit = 12): Promise<CommuneHit[]> {
+  const { norm } = await import("./imports");
+  const needle = norm(text);
+  if (needle.length < 2) return [];
+  all ??= q
+    .select({ id: communes.id, name: communes.name, nameAr: communes.nameAr, wilayaId: wilayas.id, wilaya: wilayas.name, wilayaAr: wilayas.nameAr, zone: wilayas.zone, hub: hubs.name })
+    .from(communes)
+    .innerJoin(wilayas, eq(communes.wilayaId, wilayas.id))
+    .innerJoin(hubs, eq(wilayas.hubId, hubs.id))
+    .then((rows) => rows.map((r) => ({ ...r, key: `${norm(r.name)} ${norm(r.nameAr)} ${norm(r.wilaya)}` })))
+    .catch((e) => {
+      all = null;
+      throw e;
+    });
+  const rows = await all;
+  const score = (r: { key: string; name: string; nameAr: string }) => {
+    const n = norm(r.name);
+    const a = norm(r.nameAr);
+    if (n === needle || a === needle) return 0;
+    if (n.startsWith(needle) || a.startsWith(needle)) return 1;
+    return 2;
+  };
+  return rows
+    .filter((r) => r.key.includes(needle))
+    .sort((x, y) => score(x) - score(y) || x.name.localeCompare(y.name))
+    .slice(0, limit)
+    .map((r) => ({ id: r.id, name: r.name, nameAr: r.nameAr, wilayaId: r.wilayaId, wilaya: r.wilaya, wilayaAr: r.wilayaAr, zone: r.zone, hub: r.hub }));
+}

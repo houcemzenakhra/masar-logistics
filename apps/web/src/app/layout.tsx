@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import "@fontsource-variable/noto-sans-arabic";
+import "@fontsource-variable/readex-pro";
 import { GeistMono } from "geist/font/mono";
 import { GeistSans } from "geist/font/sans";
 import { I18nProvider } from "@/components/i18n-client";

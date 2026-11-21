@@ -23,6 +23,14 @@
   --color-progress: #6a45c2;
   --color-progress-soft: #ece5fa;
   --font-sans: var(--font-geist-sans), "Noto Sans Arabic Variable", ui-sans-serif, system-ui, sans-serif;
+  /* Headlines on the public site: one family for Latin and Arabic. */
+  --font-display: "Readex Pro Variable", "Noto Sans Arabic Variable", ui-sans-serif, system-ui, sans-serif;
+  --color-chalk: #f4f6f5;
+  --color-night: #0c1a26;
+  /* Price zones, used on the map and in rate tables. */
+  --color-zone-north: #4fa3d9;
+  --color-zone-high: #9bbf6a;
+  --color-zone-south: #e7b65c;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
   --shadow-card: 0 1px 2px rgb(18 22 28 / 0.04), 0 8px 24px -12px rgb(18 22 28 / 0.12);
 }
@@ -71,4 +79,41 @@ body {
   body {
     background: #fff;
   }
+}
+
+/* Public site */
+.site {
+  background: var(--color-chalk);
+}
+
+.display {
+  font-family: var(--font-display);
+  font-variation-settings: "HEXP" 0;
+  letter-spacing: -0.025em;
+  line-height: 1.02;
+  text-wrap: balance;
+}
+
+:lang(ar) .display {
+  letter-spacing: 0;
+  line-height: 1.25;
+}
+
+.lede {
+  text-wrap: pretty;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+html {
+  scroll-behavior: smooth;
 }
