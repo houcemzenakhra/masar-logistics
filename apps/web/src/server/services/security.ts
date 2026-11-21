@@ -67,6 +67,8 @@ export const LIMITS = {
   resetAccount: (userId: string): Limit => ({ key: `reset:acct:${userId}`, max: 3, windowSeconds: 60 * 60 }),
   importMerchant: (merchantId: string): Limit => ({ key: `import:${merchantId}`, max: 30, windowSeconds: 60 * 60 }),
   smsTest: (userId: string): Limit => ({ key: `smstest:${userId}`, max: 5, windowSeconds: 60 * 60 }),
+  // Wrong phone digits on a tracking page: per parcel, so guessing is slow wherever it comes from.
+  trackVerify: (tracking: string): Limit => ({ key: `track:${tracking.toUpperCase()}`, max: 8, windowSeconds: 60 * 60 }),
 };
 
 // ---------- audit log ----------

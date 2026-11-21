@@ -30,8 +30,43 @@ jobs:
         working-directory: apps/mobile
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
+      - run: flutter --version
+      - name: Android and iOS projects
+        run: bash tool/setup_platforms.sh
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos
+      - run: flutter test
+      - name: Build the Android app
+        # Points at staging so the APK works as soon as it is installed. Firebase settings come
+        # from repository secrets when they exist; without them the app uses its in-app inbox.
+        run: >
+          flutter build apk --release
+          --dart-define=API_BASE=${{ vars.MASAR_API_BASE || 'https://masar-staging-seven.vercel.app' }}
+          --dart-define=FIREBASE_API_KEY=${{ secrets.FIREBASE_API_KEY }}
+          --dart-define=FIREBASE_APP_ID=${{ secrets.FIREBASE_APP_ID }}
+          --dart-define=FIREBASE_SENDER_ID=${{ secrets.FIREBASE_SENDER_ID }}
+          --dart-define=FIREBASE_PROJECT_ID=${{ secrets.FIREBASE_PROJECT_ID }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: masar-android-apk
+          path: apps/mobile/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+      - name: Keep the generated platform folders
+        uses: actions/upload-artifact@v4
+        with:
+          name: masar-platform-folders
+          path: |
+            apps/mobile/android
+            apps/mobile/ios
+            !apps/mobile/android/.gradle
+            !apps/mobile/android/app/build
+            !apps/mobile/ios/Pods
+          retention-days: 7

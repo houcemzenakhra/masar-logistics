@@ -1,8 +1,16 @@
-import { MapPin, PackageSearch } from "lucide-react";
+import { CalendarDays, MapPin, MessageSquareText, PackageSearch, ShieldCheck } from "lucide-react";
+import { recipientInstructionsAction, recipientRateAction, recipientRescheduleAction, recipientVerifyAction } from "@/app/actions";
+import { ActionForm, Submit } from "@/components/forms";
+import { StarInput } from "@/components/star-input";
+import { TrackLive } from "@/components/track-live";
+import { Input, Select } from "@/components/ui";
+import { recipientParcelId } from "@/lib/recipient";
+import { isTerminal, type Status } from "@/server/domain/state";
+import { rescheduleDays } from "@/server/services/recipient";
 import { SiteFooter, SiteNav, TrackForm } from "@/components/site";
 import { ProgressRail, Timeline } from "@/components/tracking";
 import { Card, StatusBadge } from "@/components/ui";
-import { ago, money } from "@/lib/format";
+import { ago, dateOnly, money } from "@/lib/format";
 import { initLocale, place, t } from "@/lib/i18n";
 import { getDb } from "@/server/db";
 import { getParcel } from "@/server/services/parcels";
@@ -13,6 +21,7 @@ export default async function Track({ params }: { params: Promise<{ tracking: st
   await initLocale();
   const tracking = decodeURIComponent((await params).tracking);
   const p = await getParcel(await getDb(), { tracking });
+  const unlocked = p ? (await recipientParcelId(p.tracking)) === p.id : false;
   return (
     <>
       <SiteNav />
@@ -55,6 +64,8 @@ export default async function Track({ params }: { params: Promise<{ tracking: st
                 </p>
               )}
             </Card>
+            {p.status === "out_for_delivery" && <TrackLive tracking={p.tracking} dest={p.lat != null && p.lng != null ? { lat: p.lat, lng: p.lng } : null} />}
+            <Manage p={p} unlocked={unlocked} />
             <Card className="p-5 sm:p-6">
               <h2 className="mb-5 text-[15px] font-semibold">{t("History")}</h2>
               {/* Recipients see where the parcel was, not who handled it or internal notes. */}
@@ -65,5 +76,62 @@ export default async function Track({ params }: { params: Promise<{ tracking: st
       </main>
       <SiteFooter />
     </>
+  );
+}
+
+type P = NonNullable<Awaited<ReturnType<typeof getParcel>>>;
+
+/** Recipient self-service: unlocked with the last four digits of the phone number on the parcel. */
+function Manage({ p, unlocked }: { p: P; unlocked: boolean }) {
+  const open = !isTerminal(p.status as Status) && p.status !== "return_initiated";
+  const canRate = p.status === "delivered" && p.rating == null;
+  if (!open && !canRate) return null;
+  if (!unlocked) {
+    return (
+      <Card className="p-5 sm:p-6">
+        <h2 className="flex items-center gap-2 text-[15px] font-semibold"><ShieldCheck size={17} className="text-accent" />{open ? t("Is this parcel for you?") : t("How was your delivery?")}</h2>
+        <p className="mt-1 text-sm text-ink-2">{open ? t("Choose another day or leave directions for the courier. First confirm the last four digits of your phone number.") : t("Rate the delivery. First confirm the last four digits of your phone number.")}</p>
+        <ActionForm action={recipientVerifyAction} className="mt-4 flex flex-wrap gap-2">
+          <input type="hidden" name="tracking" value={p.tracking} />
+          <Input name="last4" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" required placeholder="1234" aria-label={t("Last four digits of your phone number")} className="!w-32 tnum" />
+          <Submit variant="dark">{t("Confirm")}</Submit>
+        </ActionForm>
+      </Card>
+    );
+  }
+  const days = rescheduleDays();
+  return (
+    <Card className="divide-y divide-line">
+      {open && (
+        <ActionForm action={recipientRescheduleAction} className="p-5 sm:p-6">
+          <input type="hidden" name="tracking" value={p.tracking} />
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold"><CalendarDays size={17} className="text-accent" />{t("Choose another day")}</h2>
+          <p className="mt-1 text-sm text-ink-2">{p.preferredDate ? t("You asked for {day}.", { day: dateOnly(p.preferredDate) }) : t("Not at home? Pick a day in the coming week.")}</p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Select name="day" defaultValue={p.preferredDate ?? days[0]} aria-label={t("Day")} className="!w-56">
+              {days.map((d) => <option key={d} value={d}>{dateOnly(d)}</option>)}
+            </Select>
+            <Submit variant="dark">{t("Save the day")}</Submit>
+          </div>
+        </ActionForm>
+      )}
+      {open && (
+        <ActionForm action={recipientInstructionsAction} className="p-5 sm:p-6">
+          <input type="hidden" name="tracking" value={p.tracking} />
+          <h2 className="flex items-center gap-2 text-[15px] font-semibold"><MessageSquareText size={17} className="text-accent" />{t("Directions for the courier")}</h2>
+          <textarea name="instructions" dir="auto" maxLength={200} rows={2} defaultValue={p.instructions} placeholder={t("e.g. Call when outside, building B, 3rd floor")} className="mt-3 w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20" />
+          <Submit variant="dark">{t("Save directions")}</Submit>
+        </ActionForm>
+      )}
+      {canRate && (
+        <ActionForm action={recipientRateAction} className="p-5 sm:p-6">
+          <input type="hidden" name="tracking" value={p.tracking} />
+          <h2 className="text-[15px] font-semibold">{t("How was your delivery?")}</h2>
+          <div className="mt-3"><StarInput /></div>
+          <textarea name="comment" dir="auto" maxLength={300} rows={2} placeholder={t("Anything to add? (optional)")} className="mt-3 w-full rounded-xl border border-line bg-surface px-3 py-2 text-sm focus:border-accent focus:outline-none focus:ring-2 focus:ring-accent/20" />
+          <Submit variant="dark">{t("Send rating")}</Submit>
+        </ActionForm>
+      )}
+    </Card>
   );
 }

@@ -58,6 +58,7 @@ export async function queueParcelSms(q: Q, parcelId: string, kind: ParcelKind) {
       lang: parcels.recipientLang,
       cod: parcels.codAmount,
       attempts: parcels.attempts,
+      code: parcels.deliveryCode,
       merchant: merchants.name,
       merchantPhone: merchants.phone,
       courier: users.name,
@@ -77,6 +78,7 @@ export async function queueParcelSms(q: Q, parcelId: string, kind: ParcelKind) {
     cod: p.cod,
     courier: p.courier?.split(" ")[0],
     courierPhone: p.courierPhone ?? "",
+    code: kind === "out_for_delivery" ? p.code : undefined,
   });
   // One message per parcel, kind and delivery attempt, however often the event is replayed.
   const [m] = await q

@@ -14,8 +14,8 @@ export type ParcelKind = (typeof PARCEL_KINDS)[number];
  */
 const TEMPLATES: Record<ParcelKind, Record<Lang, string>> = {
   out_for_delivery: {
-    fr: "Masar: votre colis {merchant} est en livraison aujourd'hui.{cod} Livreur {courier}: {courierPhone}. Suivi: {link}",
-    ar: "مسار: طردك من {merchant} في الطريق إليك اليوم.{cod} عامل التوصيل {courier}: {courierPhone}. التتبع: {link}",
+    fr: "Masar: votre colis {merchant} est en livraison aujourd'hui.{cod}{code} Livreur {courier}: {courierPhone}. Suivi: {link}",
+    ar: "مسار: طردك من {merchant} في الطريق إليك اليوم.{cod}{code} عامل التوصيل {courier}: {courierPhone}. التتبع: {link}",
   },
   attempt_failed: {
     fr: "Masar: nous n'avons pas pu livrer votre colis {merchant} aujourd'hui. Nous repasserons. Pour changer l'adresse, appelez {merchantPhone}. Suivi: {link}",
@@ -28,6 +28,8 @@ const TEMPLATES: Record<ParcelKind, Record<Lang, string>> = {
 };
 
 const COD: Record<Lang, string> = { fr: " Montant a payer: {amount} DA.", ar: " المبلغ المطلوب: {amount} دج." };
+/** The four digits the recipient gives the courier at the door, when proof of delivery asks for it. */
+const CODE: Record<Lang, string> = { fr: " Code: {code}.", ar: " الرمز: {code}." };
 const RESET: Record<Lang, string> = {
   fr: "Masar: pour choisir un nouveau mot de passe, ouvrez {link} (valable {hours} h). Si vous n'avez rien demande, ignorez ce message.",
   ar: "مسار: لاختيار كلمة مرور جديدة افتح {link} (صالح {hours} سا). إذا لم تطلب ذلك تجاهل هذه الرسالة.",
@@ -35,7 +37,7 @@ const RESET: Record<Lang, string> = {
 
 const fill = (tpl: string, v: Record<string, string | number>) => tpl.replace(/\{(\w+)\}/g, (_, k) => String(v[k] ?? ""));
 
-export type ParcelVars = { tracking: string; merchant: string; merchantPhone: string; cod: number; courier?: string; courierPhone?: string };
+export type ParcelVars = { tracking: string; merchant: string; merchantPhone: string; cod: number; courier?: string; courierPhone?: string; code?: string };
 
 /**
  * In Arabic text a phone number like "0770 11 22 33" is broken up by the right-to-left layout.
@@ -51,6 +53,7 @@ export function renderParcelSms(kind: ParcelKind, lang: Lang, v: ParcelVars, bas
     courier: v.courier ?? "",
     courierPhone: ltr(lang, v.courierPhone ?? ""),
     cod: v.cod > 0 ? fill(COD[lang], { amount: money(v.cod) }) : "",
+    code: v.code ? fill(CODE[lang], { code: ltr(lang, v.code) }) : "",
     link: `${base}/t/${v.tracking}`,
   });
 }

@@ -22,6 +22,13 @@
       "when": 1795150611592,
       "tag": "0002_hardening_import_sms",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1795236696520,
+      "tag": "0003_apps_pod_push_claims",
+      "breakpoints": true
     }
   ]
 }

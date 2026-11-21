@@ -10,7 +10,8 @@ import { LOCALES, LOCALE_COOKIE, type Locale } from "@/i18n/config";
 import { getT, locale } from "@/lib/i18n";
 import { kickSms } from "@/lib/kick";
 import { baseUrl, clientIp, requireRole } from "@/lib/session";
-import { COOKIE_OPTS, HOME, SESSION_COOKIE, login, type Session } from "@/server/auth";
+import { RECIPIENT_COOKIE, recipientParcelId } from "@/lib/recipient";
+import { COOKIE_OPTS, HOME, SESSION_COOKIE, login, signGrant, type Session } from "@/server/auth";
 import { getDb } from "@/server/db";
 import { STATUSES, type Status } from "@/server/domain/state";
 import { maskPhone, normalizeMobile } from "@/server/phone";
@@ -20,7 +21,10 @@ import { handover, payout } from "@/server/services/ledger";
 import { addBagsToManifest, addToBag, createBag, createManifest, departManifest, receiveBag, removeBagFromManifest, removeFromBag, sealBag } from "@/server/services/linehaul";
 import { ImportHeaderError, commitBatch, discardBatch, stageImport } from "@/server/services/imports";
 import { sendMail } from "@/server/services/mail";
-import { DomainError, createParcel, getParcel, hubScanTarget, transition } from "@/server/services/parcels";
+import { CLAIM_KINDS, decideClaim, fileClaim } from "@/server/services/claims";
+import { deliver, setDeliverySettings } from "@/server/services/delivery";
+import { DomainError, FAIL_REASONS, createParcel, getParcel, hubScanTarget, transition, type FailReason } from "@/server/services/parcels";
+import { rate, reschedule, setInstructions, verifyRecipient } from "@/server/services/recipient";
 import { optimiseCourierRoute } from "@/server/services/routes";
 import { LIMITS, audit, checkLimit, clearLimit, createResetToken, rateLimit, resetPassword } from "@/server/services/security";
 import { registerMerchant, setMerchantStatus } from "@/server/services/signup";
@@ -241,7 +245,16 @@ export async function transitionAction(_: FormState, fd: FormData): Promise<Form
     const to = str(fd, "to") as Status;
     if (!STATUSES.includes(to)) throw new DomainError("Unknown status");
     const db = await getDb();
-    const p = await transition(db, { parcelId: str(fd, "parcelId"), to, actor: s, courierId: str(fd, "courierId") || undefined, note: str(fd, "note") || undefined });
+    const reason = str(fd, "reason") as FailReason;
+    const p = await transition(db, {
+      parcelId: str(fd, "parcelId"),
+      to,
+      actor: s,
+      courierId: str(fd, "courierId") || undefined,
+      note: str(fd, "note") || undefined,
+      reason: to === "attempt_failed" ? (FAIL_REASONS.includes(reason) ? reason : "other") : undefined,
+      preferredDate: str(fd, "preferredDate") || undefined,
+    });
     if (to === "out_for_delivery" && p.courierId) await optimiseCourierRoute(db, p.courierId);
     if (to === "lost" || to === "cancelled") await log(s, `parcel.${to}`, "parcel", p.id, { tracking: p.tracking });
     kick();
@@ -486,3 +499,110 @@ export async function smsTestAction(_: FormState, fd: FormData): Promise<FormSta
   });
 }
 
+
+// ---------- delivery with proof ----------
+
+export async function deliverAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("courier", "admin");
+  return guard(async () => {
+    await deliver(await getDb(), {
+      parcelId: str(fd, "parcelId"),
+      actor: s,
+      code: str(fd, "code") || undefined,
+      photo: str(fd, "photos") || undefined,
+      receivedBy: str(fd, "receivedBy") || undefined,
+    });
+    kick();
+    refresh();
+  });
+}
+
+export async function deliverySettingsAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const proof = fd.get("proof") === "required" ? "required" : "optional";
+    await setDeliverySettings(await getDb(), { proof });
+    await log(s, "settings.delivery", "settings", "delivery", { proof });
+    refresh();
+    return { ok: t("Saved.") };
+  });
+}
+
+// ---------- claims ----------
+
+export async function fileClaimAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("merchant");
+  let id = "";
+  const res = await guard(async () => {
+    const kind = str(fd, "kind") as (typeof CLAIM_KINDS)[number];
+    if (!CLAIM_KINDS.includes(kind)) throw new DomainError("Choose what happened");
+    const c = await fileClaim(
+      await getDb(),
+      { tracking: str(fd, "tracking"), kind, description: str(fd, "description"), amount: Number(str(fd, "amount")), photos: fd.getAll("photos").map(String).filter(Boolean) },
+      s,
+    );
+    await log(s, "claim.filed", "claim", c.id, { code: c.code });
+    kick();
+    id = c.id;
+  });
+  if (id) redirect(`/merchant/claims/${id}`);
+  return res;
+}
+
+export async function decideClaimAction(_: FormState, fd: FormData): Promise<FormState> {
+  const s = await requireRole("admin");
+  return guard(async (t) => {
+    const approve = fd.get("decision") === "approve";
+    const c = await decideClaim(await getDb(), { claimId: str(fd, "claimId"), approve, amount: approve ? Number(str(fd, "amount")) : undefined, note: str(fd, "note") }, s);
+    await log(s, approve ? "claim.approved" : "claim.rejected", "claim", c.id, { code: c.code, amount: c.amountApproved });
+    kick();
+    refresh();
+    return { ok: approve ? t("Approved. The amount is in the merchant's wallet.") : t("Declined. The merchant has been told why.") };
+  });
+}
+
+// ---------- recipient, from the tracking page ----------
+
+export async function recipientVerifyAction(_: FormState, fd: FormData): Promise<FormState> {
+  return guard(async () => {
+    const tracking = str(fd, "tracking").toUpperCase();
+    const id = await verifyRecipient(await getDb(), tracking, str(fd, "last4"));
+    (await cookies()).set(RECIPIENT_COOKIE(tracking), await signGrant("recipient", id, 2 * 3600), { ...COOKIE_OPTS, maxAge: 2 * 3600 });
+    refresh();
+  });
+}
+
+async function recipientGuard(fd: FormData) {
+  const tracking = str(fd, "tracking");
+  const id = await recipientParcelId(tracking);
+  if (!id) throw new DomainError("Confirm the last four digits of your phone number first");
+  const p = await getParcel(await getDb(), { tracking });
+  if (!p || p.id !== id) throw new DomainError("Confirm the last four digits of your phone number first");
+  return id;
+}
+
+export async function recipientRescheduleAction(_: FormState, fd: FormData): Promise<FormState> {
+  return guard(async (t) => {
+    await reschedule(await getDb(), await recipientGuard(fd), str(fd, "day"));
+    kick();
+    refresh();
+    return { ok: t("Done. We will bring it on the day you chose.") };
+  });
+}
+
+export async function recipientInstructionsAction(_: FormState, fd: FormData): Promise<FormState> {
+  return guard(async (t) => {
+    await setInstructions(await getDb(), await recipientGuard(fd), str(fd, "instructions"));
+    kick();
+    refresh();
+    return { ok: t("Saved. The courier will see your note.") };
+  });
+}
+
+export async function recipientRateAction(_: FormState, fd: FormData): Promise<FormState> {
+  return guard(async (t) => {
+    await rate(await getDb(), await recipientGuard(fd), Number(str(fd, "stars")), str(fd, "comment"));
+    refresh();
+    return { ok: t("Thank you for your rating.") };
+  });
+}

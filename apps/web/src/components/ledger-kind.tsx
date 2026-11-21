@@ -1,7 +1,7 @@
 import { t } from "@/lib/i18n";
 import { Badge } from "./ui";
 
-const KIND = { delivery: ["Delivery", "success"], return_fee: ["Return fee", "warn"], handover: ["Handover", "info"], payout: ["Payout", "progress"] } as const;
+const KIND = { delivery: ["Delivery", "success"], return_fee: ["Return fee", "warn"], handover: ["Handover", "info"], payout: ["Payout", "progress"], claim: ["Claim payment", "success"] } as const;
 
 export const KindBadge = ({ kind }: { kind: keyof typeof KIND }) => <Badge tone={KIND[kind][1]}>{t(KIND[kind][0])}</Badge>;
 

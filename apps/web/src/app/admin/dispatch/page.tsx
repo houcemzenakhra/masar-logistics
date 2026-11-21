@@ -7,6 +7,7 @@ import { t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers } from "@/server/services/directory";
+import { algeriaToday } from "@/server/services/dispatch";
 import { listParcels, type ParcelView } from "@/server/services/parcels";
 
 type C = { id: string; name: string; active: number; hub: string | null };
@@ -46,13 +47,18 @@ export default async function Dispatch() {
   ]);
   const couriers = all.filter((c) => c.isActive);
   // At the origin hub a parcel is only deliverable when that hub is also its destination hub.
-  const deliveries = atHub.filter((p) => p.status !== "at_origin_hub" || (p.originHubId === p.destHubId && !p.bagId));
+  const deliverable = atHub.filter((p) => p.status !== "at_origin_hub" || (p.originHubId === p.destHubId && !p.bagId));
+  // Recipients can ask for a later day on the tracking page; those parcels wait, and auto-assign skips them.
+  const today = algeriaToday();
+  const deliveries = deliverable.filter((p) => !p.preferredDate || p.preferredDate <= today);
+  const later = deliverable.filter((p) => p.preferredDate && p.preferredDate > today);
   return (
     <>
       <PageHeader title={t("Dispatch")} subtitle={t("Tick parcels and choose a courier, or let Masar share the work among the couriers of each hub. Delivery routes are planned as soon as parcels are assigned.")} />
       <div className="space-y-5">
         <Board title={t("Waiting for pickup")} hint={t("New orders at the merchant")} mode="pickup" rows={pickups} couriers={couriers} />
         <Board title={t("Ready for delivery")} hint={t("At the destination hub, including parcels to retry")} mode="delivery" rows={deliveries} couriers={couriers} />
+        {later.length > 0 && <Board title={t("Waiting for the day the recipient chose")} hint={t("Auto-assign leaves these until their day. You can still assign one by hand.")} mode="delivery" rows={later} couriers={couriers} />}
       </div>
     </>
   );

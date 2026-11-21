@@ -14,6 +14,7 @@ const ITEMS: NavItem[] = [
   { href: "/merchant/parcels/new", label: "New order", icon: "plus", exact: true },
   { href: "/merchant/import", label: "Import", icon: "upload" },
   { href: "/merchant/wallet", label: "Wallet", icon: "wallet" },
+  { href: "/merchant/claims", label: "Claims", icon: "claims" },
 ];
 
 export default async function MerchantLayout({ children }: { children: React.ReactNode }) {

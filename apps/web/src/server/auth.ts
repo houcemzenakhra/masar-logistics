@@ -28,6 +28,21 @@ function secret() {
   return new TextEncoder().encode(s ?? "masar-dev-secret-change-me");
 }
 
+/** A short-lived signed value for something other than a session, e.g. a recipient's tracking access. */
+export async function signGrant(purpose: string, subject: string, seconds: number) {
+  return new SignJWT({ p: purpose }).setProtectedHeader({ alg: "HS256" }).setSubject(subject).setIssuedAt().setExpirationTime(`${seconds}s`).sign(secret());
+}
+
+export async function verifyGrant(token: string | undefined, purpose: string): Promise<string | null> {
+  if (!token) return null;
+  try {
+    const { payload } = await jwtVerify(token, secret());
+    return payload.p === purpose && typeof payload.sub === "string" ? payload.sub : null;
+  } catch {
+    return null;
+  }
+}
+
 let DUMMY: string | undefined;
 
 export const hashPassword = (p: string) => bcrypt.hash(p, 10);

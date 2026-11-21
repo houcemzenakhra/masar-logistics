@@ -1,4 +1,5 @@
 import { relations } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import { boolean, doublePrecision, index, integer, jsonb, pgTable, text, timestamp, uniqueIndex } from "drizzle-orm/pg-core";
 
 const id = () => text("id").primaryKey().$defaultFn(() => crypto.randomUUID());
@@ -62,6 +63,8 @@ export const users = pgTable("users", {
   /** Raised when the password changes or the account is deactivated; older sessions stop working. */
   sessionVersion: integer("session_version").notNull().default(0),
   lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+  /** Language of notifications sent to this person: set by the app they sign in with. */
+  lang: text("lang", { enum: ["en", "fr", "ar"] }).notNull().default("fr"),
   createdAt: createdAt(),
 });
 
@@ -206,6 +209,17 @@ export const parcels = pgTable(
     /** The spreadsheet import that created the parcel, if any. */
     importId: text("import_id").references(() => importBatches.id),
     attempts: integer("attempts").notNull().default(0),
+    /** Four digits sent to the recipient; the courier can ask for it as proof of delivery. */
+    deliveryCode: text("delivery_code").notNull().default(sql`lpad(floor(random() * 10000)::int::text, 4, '0')`),
+    /** Reason given on the last failed attempt. */
+    failReason: text("fail_reason"),
+    /** Day the recipient asked to be delivered, YYYY-MM-DD. Dispatch waits until then. */
+    preferredDate: text("preferred_date"),
+    /** Directions from the recipient for the courier. */
+    instructions: text("instructions").notNull().default(""),
+    /** Recipient's rating of the delivery, 1 to 5. */
+    rating: integer("rating"),
+    ratingComment: text("rating_comment").notNull().default(""),
     createdAt: createdAt(),
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
     deliveredAt: timestamp("delivered_at", { withTimezone: true }),
@@ -240,7 +254,7 @@ export const parcelEvents = pgTable(
 /** Double-entry ledger. Every transaction's lines sum to zero. */
 export const ledgerTxns = pgTable("ledger_txns", {
   id: id(),
-  kind: text("kind", { enum: ["delivery", "return_fee", "handover", "payout"] }).notNull(),
+  kind: text("kind", { enum: ["delivery", "return_fee", "handover", "payout", "claim"] }).notNull(),
   parcelId: text("parcel_id").references(() => parcels.id),
   memo: text("memo").notNull().default(""),
   createdBy: text("created_by").references(() => users.id),
@@ -286,6 +300,132 @@ export const smsMessages = pgTable(
     sentAt: timestamp("sent_at", { withTimezone: true }),
   },
   (t) => [index("sms_status_idx").on(t.status), index("sms_parcel_idx").on(t.parcelId)],
+);
+
+/** What the courier recorded at the door: the recipient's code, a photo or a signature. */
+export const deliveryProofs = pgTable(
+  "delivery_proofs",
+  {
+    id: id(),
+    parcelId: text("parcel_id").notNull().references(() => parcels.id),
+    kind: text("kind", { enum: ["code", "photo", "signature"] }).notNull(),
+    /** JPEG or PNG as a data URL, at most a few hundred kilobytes. Empty for a code. */
+    image: text("image"),
+    receivedBy: text("received_by").notNull().default(""),
+    lat: doublePrecision("lat"),
+    lng: doublePrecision("lng"),
+    actorId: text("actor_id").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("delivery_proofs_parcel_idx").on(t.parcelId)],
+);
+
+/** Last known position of each courier on duty. */
+export const courierPositions = pgTable("courier_positions", {
+  courierId: text("courier_id").primaryKey().references(() => users.id),
+  lat: doublePrecision("lat").notNull(),
+  lng: doublePrecision("lng").notNull(),
+  accuracy: doublePrecision("accuracy"),
+  heading: doublePrecision("heading"),
+  speed: doublePrecision("speed"),
+  at: timestamp("at", { withTimezone: true }).notNull(),
+});
+
+/** Recent positions, kept a few days to draw where a courier went. */
+export const courierTrail = pgTable(
+  "courier_trail",
+  {
+    id: id(),
+    courierId: text("courier_id").notNull().references(() => users.id),
+    lat: doublePrecision("lat").notNull(),
+    lng: doublePrecision("lng").notNull(),
+    at: timestamp("at", { withTimezone: true }).notNull(),
+  },
+  (t) => [index("courier_trail_courier_at_idx").on(t.courierId, t.at)],
+);
+
+/** Phones that receive push notifications. One person can have several. */
+export const devices = pgTable(
+  "devices",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id),
+    token: text("token").notNull().unique(),
+    platform: text("platform", { enum: ["android", "ios", "web"] }).notNull(),
+    updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
+  },
+  (t) => [index("devices_user_idx").on(t.userId)],
+);
+
+/**
+ * Each person's notification inbox, and the outbox for push: a row is written in the same
+ * transaction as the event, then pushed to the person's phones after the response.
+ */
+export const notifications = pgTable(
+  "notifications",
+  {
+    id: id(),
+    userId: text("user_id").notNull().references(() => users.id),
+    kind: text("kind").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    /** Where the app opens when tapped, e.g. {"parcelId": "…"}. */
+    data: jsonb("data").notNull().default({}),
+    /** Stops one event notifying the same person twice. */
+    dedupeKey: text("dedupe_key").unique(),
+    readAt: timestamp("read_at", { withTimezone: true }),
+    /** `none`: the person has no phone registered. `simulated`: push is not configured. */
+    push: text("push", { enum: ["queued", "sending", "sent", "failed", "simulated", "none"] }).notNull().default("queued"),
+    pushError: text("push_error"),
+    createdAt: createdAt(),
+  },
+  (t) => [index("notifications_user_idx").on(t.userId, t.createdAt), index("notifications_push_idx").on(t.push)],
+);
+
+/** A merchant's claim for a lost or damaged parcel. Approved claims are paid into the wallet. */
+export const claims = pgTable(
+  "claims",
+  {
+    id: id(),
+    code: text("code").notNull().unique(),
+    parcelId: text("parcel_id").notNull().references(() => parcels.id),
+    merchantId: text("merchant_id").notNull().references(() => merchants.id),
+    kind: text("kind", { enum: ["lost", "damaged", "missing_items"] }).notNull(),
+    description: text("description").notNull(),
+    amountRequested: integer("amount_requested").notNull(),
+    status: text("status", { enum: ["open", "approved", "rejected"] }).notNull().default("open"),
+    amountApproved: integer("amount_approved"),
+    decisionNote: text("decision_note").notNull().default(""),
+    decidedBy: text("decided_by").references(() => users.id),
+    decidedAt: timestamp("decided_at", { withTimezone: true }),
+    createdBy: text("created_by").references(() => users.id),
+    createdAt: createdAt(),
+  },
+  (t) => [index("claims_merchant_idx").on(t.merchantId), index("claims_status_idx").on(t.status), index("claims_parcel_idx").on(t.parcelId)],
+);
+
+export const claimPhotos = pgTable(
+  "claim_photos",
+  {
+    id: id(),
+    claimId: text("claim_id").notNull().references(() => claims.id),
+    image: text("image").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("claim_photos_claim_idx").on(t.claimId)],
+);
+
+/** What a recipient asked for on the tracking page. Kept as a log; the parcel holds the current values. */
+export const recipientRequests = pgTable(
+  "recipient_requests",
+  {
+    id: id(),
+    parcelId: text("parcel_id").notNull().references(() => parcels.id),
+    kind: text("kind", { enum: ["reschedule", "instructions", "rating"] }).notNull(),
+    payload: jsonb("payload").notNull(),
+    createdAt: createdAt(),
+  },
+  (t) => [index("recipient_requests_parcel_idx").on(t.parcelId)],
 );
 
 export const parcelsRelations = relations(parcels, ({ many }) => ({ events: many(parcelEvents) }));

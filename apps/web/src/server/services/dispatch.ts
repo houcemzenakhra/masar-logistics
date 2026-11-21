@@ -2,10 +2,17 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { hashPassword } from "../auth";
 import type { Q } from "../db";
 import { hubs, parcels, users } from "../schema";
+import { notify } from "./notify";
 import { DomainError, transition, type Actor } from "./parcels";
 import { optimiseCourierRoute } from "./routes";
 
-/** Parcels waiting for a courier: new orders to pick up, or parcels at their destination hub. */
+/** Today in Algeria, YYYY-MM-DD. */
+export const algeriaToday = (d = new Date()) => new Intl.DateTimeFormat("en-CA", { timeZone: "Africa/Algiers" }).format(d);
+
+/**
+ * Parcels waiting for a courier: new orders to pick up, or parcels at their destination hub.
+ * A parcel whose recipient asked for a later day waits until that day.
+ */
 export async function waiting(q: Q, mode: "pickup" | "delivery") {
   if (mode === "pickup") {
     return q.select({ id: parcels.id, hubId: parcels.originHubId }).from(parcels).where(eq(parcels.status, "created"));
@@ -14,7 +21,7 @@ export async function waiting(q: Q, mode: "pickup" | "delivery") {
     .select({ id: parcels.id, hubId: parcels.destHubId })
     .from(parcels)
     .where(
-      sql`${parcels.status} in ('at_destination_hub', 'attempt_failed') or (${parcels.status} = 'at_origin_hub' and ${parcels.originHubId} = ${parcels.destHubId} and ${parcels.bagId} is null)`,
+      sql`(${parcels.status} in ('at_destination_hub', 'attempt_failed') or (${parcels.status} = 'at_origin_hub' and ${parcels.originHubId} = ${parcels.destHubId} and ${parcels.bagId} is null)) and (${parcels.preferredDate} is null or ${parcels.preferredDate} <= ${algeriaToday()})`,
     );
 }
 
@@ -26,6 +33,7 @@ export async function assign(q: Q, a: { ids: string[]; courierId: string; mode: 
     const to = a.mode === "pickup" ? "pickup_assigned" : "out_for_delivery";
     for (const parcelId of a.ids) await transition(tx, { parcelId, to, actor, courierId: a.courierId });
     if (a.mode === "delivery") await optimiseCourierRoute(tx, a.courierId);
+    await notify(tx, [a.courierId], "jobs", { n: a.ids.length }, { mode: a.mode });
     return a.ids.length;
   });
 }
@@ -47,6 +55,7 @@ export async function autoAssign(q: Q, mode: "pickup" | "delivery", actor: Actor
       .where(and(eq(users.role, "courier"), eq(users.active, true)));
     const to = mode === "pickup" ? "pickup_assigned" : "out_for_delivery";
     const touched = new Set<string>();
+    const given = new Map<string, number>();
     let assigned = 0;
     for (const p of todo) {
       const pool = couriers.filter((c) => c.hubId === p.hubId).sort((a, b) => a.load - b.load);
@@ -54,9 +63,11 @@ export async function autoAssign(q: Q, mode: "pickup" | "delivery", actor: Actor
       await transition(tx, { parcelId: p.id, to, actor, courierId: pool[0].id });
       pool[0].load++;
       touched.add(pool[0].id);
+      given.set(pool[0].id, (given.get(pool[0].id) ?? 0) + 1);
       assigned++;
     }
     if (mode === "delivery") for (const id of touched) await optimiseCourierRoute(tx, id);
+    for (const [id, n] of given) await notify(tx, [id], "jobs", { n }, { mode });
     return { assigned, skipped: todo.length - assigned, couriers: touched.size };
   });
 }

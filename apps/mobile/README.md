@@ -1,43 +1,57 @@
 # Masar mobile
 
-One Flutter app with three modes, chosen by the role of the account that signs in:
+One Flutter app for everyone who handles a parcel. The account that signs in decides the screens:
 
-- **Courier:** run sheet, cash to hand over, scan to confirm pickup, deliver, record a failed attempt.
-  Moves made without signal are saved on the phone and sent later.
-- **Hub staff:** scan parcels in and out with the camera or by typing the number.
-- **Merchant:** orders, order detail and history, new order, wallet.
+- **Courier:** today's run in route order, on a list and on a map; call, text or navigate to a stop;
+  scan to confirm a pickup; deliver with proof (the recipient's 4-digit code, a photo or a
+  signature); record a failed attempt with its reason or the day the recipient asked for; cash
+  held. Everything works without signal: actions are saved on the phone and sent when it returns,
+  each applied once and at the time it really happened. "On duty" shares the courier's position
+  with operations and, while their parcel is out for delivery, with the recipient.
+- **Hub team** (and operations, who pick a hub): the floor at a glance, continuous scanning in and
+  out (a whole bag is received with one scan), bags (scan parcels in, seal) and trucks (load sealed
+  bags, depart; the receiving hub is notified).
+- **Merchant:** balance and latest orders, orders with search and filters, order detail with
+  history and proof of delivery, new order, wallet statement, claims with photos.
 
-Stack: Riverpod, go_router, dio, mobile_scanner, flutter_secure_storage.
+Everyone gets a notification inbox. With Firebase settings (below) notifications are also pushed
+to the phone; without them the inbox still works.
 
-## Status
+The app is in Arabic, French and English, right to left in Arabic.
 
-The code passes `flutter analyze` on the stable channel in CI with no errors or warnings. It was
-written without a device or emulator available, so it has not been run yet: test each mode on a
-phone before relying on it. The platform folders are not included; generate them once:
+## Get the app
+
+Every push to `main` builds an Android app in GitHub Actions: open the latest **CI** run and
+download **masar-android-apk**. It points at the staging server.
+
+## Build it yourself
 
 ```bash
 cd apps/mobile
-flutter create . --platforms=android,ios --project-name masar_mobile
+bash tool/setup_platforms.sh   # creates android/ and ios/ if missing, adds permissions
 flutter pub get
-flutter analyze
-```
+flutter test
 
-Then add the camera permission for the scanner:
-
-- Android: `<uses-permission android:name="android.permission.CAMERA" />` in `android/app/src/main/AndroidManifest.xml`
-- iOS: `NSCameraUsageDescription` in `ios/Runner/Info.plist`
-
-## Run
-
-Start the web app first (`apps/web`, `npm run dev`), then:
-
-```bash
-# Android emulator (10.0.2.2 is your computer)
+# Against the web app on your computer (Android emulator: 10.0.2.2 is your computer)
 flutter run --dart-define=API_BASE=http://10.0.2.2:3000
 
-# Real device: use your computer's LAN address
-flutter run --dart-define=API_BASE=http://192.168.1.20:3000
+# Against staging
+flutter run --dart-define=API_BASE=https://masar-staging-seven.vercel.app
 ```
 
-Sign in with the demo accounts from the repository README. Plain `http` to a LAN address needs
-cleartext allowed on Android in debug builds; use HTTPS for anything real.
+The server can also be changed from the sign-in screen, under the address shown at the bottom.
+
+### Push notifications
+
+1. Create a Firebase project and add an Android app with package `dz.masar.masar_mobile`.
+2. Build with its settings:
+   `--dart-define=FIREBASE_API_KEY=… --dart-define=FIREBASE_APP_ID=… --dart-define=FIREBASE_SENDER_ID=… --dart-define=FIREBASE_PROJECT_ID=…`
+   (in CI, set repository secrets with the same names).
+3. On the server, set `FCM_SERVICE_ACCOUNT` to the service account JSON (Project settings >
+   Service accounts > Generate new private key). The admin Settings page shows whether it is connected.
+
+## Status
+
+CI runs `flutter analyze`, the tests and a release build on every push. The app has not yet been
+tried on a physical phone: check scanning, the camera, on-duty location and push on a real
+device before relying on them.

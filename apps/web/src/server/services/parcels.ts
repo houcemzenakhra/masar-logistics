@@ -6,6 +6,7 @@ import { quote, tierFor, type Tier } from "../domain/pricing";
 import { MAX_ATTEMPTS, canTransition, type Status } from "../domain/state";
 import { bags, communes, hubs, merchants, parcelEvents, parcels, rateTiers, users, wilayas } from "../schema";
 import { acct, post } from "./ledger";
+import { FAIL_REASONS, REASON_TEXT, merchantUsers, notify, type FailReason } from "./notify";
 import { queueParcelSms } from "./sms";
 
 export class DomainError extends Error {}
@@ -31,6 +32,9 @@ const view = {
   commune: parcels.commune,
   communeAr: destCommune.nameAr,
   communeId: parcels.communeId,
+  /** Centre of the destination commune: where the stop goes on a map. */
+  lat: destCommune.lat,
+  lng: destCommune.lng,
   address: parcels.address,
   recipientLang: parcels.recipientLang,
   description: parcels.description,
@@ -48,6 +52,11 @@ const view = {
   bagId: parcels.bagId,
   routeSeq: parcels.routeSeq,
   attempts: parcels.attempts,
+  failReason: parcels.failReason,
+  preferredDate: parcels.preferredDate,
+  instructions: parcels.instructions,
+  rating: parcels.rating,
+  ratingComment: parcels.ratingComment,
   createdAt: parcels.createdAt,
   updatedAt: parcels.updatedAt,
   deliveredAt: parcels.deliveredAt,
@@ -207,7 +216,13 @@ export type TransitionInput = {
   at?: Date;
   /** Set by the linehaul service when it moves a whole bag. */
   viaBag?: boolean;
+  /** Why a delivery failed. A refusal sends the parcel back at once. */
+  reason?: FailReason;
+  /** With reason `reschedule`: the day the recipient asked for, YYYY-MM-DD. */
+  preferredDate?: string;
 };
+
+export { FAIL_REASONS, type FailReason };
 
 /**
  * The only way a parcel changes status. Checks the state machine and the actor's role, writes the
@@ -278,6 +293,11 @@ export async function transition(db: Q, input: TransitionInput) {
     if (to === "attempt_failed") {
       patch.attempts = p.attempts + 1;
       patch.currentHubId = p.destHubId;
+      patch.failReason = input.reason ?? "other";
+      if (input.reason === "reschedule" && input.preferredDate) {
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(input.preferredDate)) throw new DomainError("The new day must be a date like 2026-11-24");
+        patch.preferredDate = input.preferredDate;
+      }
     }
     if (to === "returned") patch.courierId = null;
     if (to === "delivered") {
@@ -309,23 +329,25 @@ export async function transition(db: Q, input: TransitionInput) {
       });
     }
 
+    const reasonText = to === "attempt_failed" ? REASON_TEXT[input.reason ?? "other"].en : "";
     await tx.insert(parcelEvents).values({
       parcelId: p.id,
       status: to,
-      note: input.note ?? "",
+      note: [reasonText, input.note].filter(Boolean).join(": "),
       actorId: actor.userId,
       hubId,
       idempotencyKey: input.idempotencyKey,
       createdAt: at,
     });
 
-    // Too many failed attempts: the parcel goes back to the merchant.
-    if (to === "attempt_failed" && (patch.attempts ?? 0) >= MAX_ATTEMPTS) {
+    // Refused, or too many failed attempts: the parcel goes back to the merchant.
+    const refused = to === "attempt_failed" && input.reason === "refused";
+    if (to === "attempt_failed" && (refused || (patch.attempts ?? 0) >= MAX_ATTEMPTS)) {
       patch.status = "return_initiated";
       await tx.insert(parcelEvents).values({
         parcelId: p.id,
         status: "return_initiated",
-        note: `Returned automatically after ${MAX_ATTEMPTS} failed attempts`,
+        note: refused ? "Returned: the recipient refused the parcel" : `Returned automatically after ${MAX_ATTEMPTS} failed attempts`,
         hubId: p.destHubId,
         createdAt: new Date(at.getTime() + 1),
       });
@@ -338,6 +360,19 @@ export async function transition(db: Q, input: TransitionInput) {
     if (to === "delivered") await queueParcelSms(tx, p.id, "delivered");
     // When the parcel is going back to the merchant, the recipient is not told "we will come back".
     if (to === "attempt_failed" && updated.status === "attempt_failed") await queueParcelSms(tx, p.id, "attempt_failed");
+
+    // Tell the merchant's people. Each event notifies once, however often it is replayed.
+    const vars = { tracking: p.tracking, name: p.recipientName };
+    const data = { parcelId: p.id };
+    if (to === "delivered" || to === "attempt_failed" || to === "returned" || updated.status === "return_initiated") {
+      const people = await merchantUsers(tx, p.merchantId);
+      if (to === "delivered") await notify(tx, people, "delivered", { ...vars, amount: p.codAmount - p.deliveryFee }, data, `${p.id}:delivered`);
+      else if (to === "returned") await notify(tx, people, "returned", { ...vars, fee: p.returnFee }, data, `${p.id}:returned`);
+      else if (updated.status === "return_initiated") {
+        const why = refused ? REASON_TEXT.refused : { en: `${MAX_ATTEMPTS} failed attempts`, fr: `${MAX_ATTEMPTS} tentatives échouées`, ar: `${MAX_ATTEMPTS} محاولات فاشلة` };
+        await notify(tx, people, "returning", { ...vars, reason: to === "return_initiated" ? { en: "returned by operations", fr: "retour décidé par l'exploitation", ar: "إرجاع بقرار من الإدارة" } : why }, data, `${p.id}:returning`);
+      } else await notify(tx, people, "failed", { ...vars, reason: REASON_TEXT[input.reason ?? "other"], n: updated.attempts, max: MAX_ATTEMPTS }, data, `${p.id}:failed:${updated.attempts}`);
+    }
     return updated;
   });
 }

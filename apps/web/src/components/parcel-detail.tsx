@@ -1,16 +1,89 @@
-import { Printer } from "lucide-react";
+import { MessageSquareQuote, Printer, Star } from "lucide-react";
 import Link from "next/link";
 import { transitionAction } from "@/app/actions";
 import { dateTime } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
 import type { Session } from "@/server/auth";
 import { STATUS_LABEL, nextStatuses, type Status } from "@/server/domain/state";
+import type { listClaims } from "@/server/services/claims";
+import type { listProofs } from "@/server/services/delivery";
+import { FAIL_REASONS, REASON_TEXT } from "@/server/services/notify";
 import type { getParcel } from "@/server/services/parcels";
+import type { listRequests } from "@/server/services/recipient";
 import { ActionForm, Submit } from "./forms";
 import { ProgressRail, Timeline } from "./tracking";
 import { Badge, Card, CardHeader, LinkButton, Money, Select, StatusBadge } from "./ui";
 
 type Parcel = NonNullable<Awaited<ReturnType<typeof getParcel>>>;
+export type DoorInfo = {
+  proofs: Awaited<ReturnType<typeof listProofs>>;
+  requests: Awaited<ReturnType<typeof listRequests>>;
+  claims: Awaited<ReturnType<typeof listClaims>>;
+};
+
+const PROOF_LABEL = { code: "Recipient's code", photo: "Photo", signature: "Signature" } as const;
+const CLAIM_STATUS = { open: ["Under review", "warn"], approved: ["Approved", "success"], rejected: ["Declined", "danger"] } as const;
+const reasonLabel = (r: string | null) => (r && r in REASON_TEXT ? t(REASON_TEXT[r as keyof typeof REASON_TEXT].en) : null);
+
+/** What happened at the door and what the recipient asked for. */
+function Door({ p, door, session }: { p: Parcel; door: DoorInfo; session: Session }) {
+  const canClaim = session.role === "merchant" && ["delivered", "returned", "lost"].includes(p.status) && !door.claims.some((c) => c.status !== "rejected");
+  const has = door.proofs.length || p.failReason || p.preferredDate || p.instructions || p.rating || door.requests.length || door.claims.length || canClaim;
+  if (!has) return null;
+  return (
+    <Card>
+      <CardHeader title={t("At the door")} />
+      <div className="space-y-5 p-5">
+        {door.proofs.length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium">{t("Proof of delivery")}</h3>
+            <div className="mt-2 flex flex-wrap gap-3">
+              {door.proofs.map((x) =>
+                x.kind === "code" ? (
+                  <span key={x.id} className="rounded-xl bg-ok-soft px-3 py-2 text-sm text-ok">{t("Recipient's code checked")}</span>
+                ) : (
+                  <a key={x.id} href={`/api/v1/parcels/${p.id}/proofs/${x.id}`} target="_blank" className="block overflow-hidden rounded-xl ring-1 ring-line">
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={`/api/v1/parcels/${p.id}/proofs/${x.id}`} alt={t(PROOF_LABEL[x.kind])} className={`h-28 w-auto ${x.kind === "signature" ? "bg-white p-2" : "object-cover"}`} />
+                    <span className="block bg-paper px-2 py-1 text-[12px] text-muted">{t(PROOF_LABEL[x.kind])}</span>
+                  </a>
+                ),
+              )}
+            </div>
+            {door.proofs[0].receivedBy && <p className="mt-2 text-sm text-ink-2">{t("Received by {name}", { name: door.proofs[0].receivedBy })}</p>}
+          </div>
+        )}
+        <dl className="divide-y divide-line">
+          {p.failReason && p.status !== "delivered" && <Row k="Last failed attempt">{reasonLabel(p.failReason)}</Row>}
+          {p.preferredDate && p.status !== "delivered" && <Row k="Recipient asked for">{p.preferredDate}</Row>}
+          {p.instructions && <Row k="Directions from the recipient"><span dir="auto">{p.instructions}</span></Row>}
+          {p.rating != null && (
+            <Row k="Rating">
+              <span className="inline-flex items-center gap-0.5 text-warn" aria-label={t("{n} out of 5", { n: p.rating })}>
+                {Array.from({ length: 5 }, (_, i) => <Star key={i} size={14} fill={i < p.rating! ? "currentColor" : "none"} />)}
+              </span>
+            </Row>
+          )}
+        </dl>
+        {p.ratingComment && <p dir="auto" className="flex gap-2 text-sm text-ink-2"><MessageSquareQuote size={16} className="shrink-0 text-muted" />{p.ratingComment}</p>}
+        {door.claims.length > 0 && (
+          <div>
+            <h3 className="text-sm font-medium">{t("Claims")}</h3>
+            <ul className="mt-2 space-y-2">
+              {door.claims.map((c) => (
+                <li key={c.id} className="flex items-center justify-between gap-3 text-sm">
+                  <Link href={`/${session.role === "merchant" ? "merchant" : "admin"}/claims/${c.id}`} className="font-mono text-accent-deep hover:underline">{c.code}</Link>
+                  <Badge tone={CLAIM_STATUS[c.status][1]}>{t(CLAIM_STATUS[c.status][0])}</Badge>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {canClaim && <LinkButton href={`/merchant/claims/new?tracking=${p.tracking}`} variant="ghost" size="sm">{t("Report a problem with this parcel")}</LinkButton>}
+      </div>
+    </Card>
+  );
+}
 
 const VERB: Partial<Record<Status, string>> = {
   pickup_assigned: "Assign pickup",
@@ -49,7 +122,7 @@ type Sms = { id: string; kind: string; status: string; createdAt: Date; body: st
 const SMS_KIND: Record<string, string> = { out_for_delivery: "Out for delivery", attempt_failed: "Delivery failed", delivered: "Delivered" };
 const SMS_STATUS: Record<string, [string, "success" | "danger" | "warn" | "neutral"]> = { sent: ["Sent", "success"], failed: ["Failed", "danger"], simulated: ["Test mode", "warn"], queued: ["Queued", "neutral"], sending: ["Sending", "neutral"] };
 
-export function ParcelDetail({ p, session, couriers = [], bag, sms }: { p: Parcel; session: Session; couriers?: { id: string; name: string }[]; bag?: { id: string; code: string } | null; sms?: Sms[] }) {
+export function ParcelDetail({ p, session, couriers = [], bag, sms, door }: { p: Parcel; session: Session; couriers?: { id: string; name: string }[]; bag?: { id: string; code: string } | null; sms?: Sms[]; door?: DoorInfo }) {
   const next = nextStatuses(p.status as Status, session.role);
   const net = p.codAmount - p.deliveryFee;
   return (
@@ -79,6 +152,11 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms }: { p: Parce
                   <ActionForm key={to} action={transitionAction} className="flex flex-wrap items-center gap-2">
                     <input type="hidden" name="parcelId" value={p.id} />
                     <input type="hidden" name="to" value={to} />
+                    {to === "attempt_failed" && (
+                      <Select name="reason" defaultValue="no_answer" aria-label={t("Reason")} className="!w-52">
+                        {FAIL_REASONS.map((r) => <option key={r} value={r}>{t(REASON_TEXT[r].en)}</option>)}
+                      </Select>
+                    )}
                     {needsCourier && (
                       <Select name="courierId" required defaultValue={p.courierId ?? ""} aria-label={t("Courier")} className="!w-44">
                         <option value="" disabled>{t("Choose courier")}</option>
@@ -92,6 +170,8 @@ export function ParcelDetail({ p, session, couriers = [], bag, sms }: { p: Parce
             </div>
           </Card>
         )}
+
+        {door && <Door p={p} door={door} session={session} />}
 
         {sms && sms.length > 0 && (
           <Card>

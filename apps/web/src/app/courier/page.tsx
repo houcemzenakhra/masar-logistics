@@ -1,20 +1,21 @@
-import { LogOut, MapPin, Phone, Route } from "lucide-react";
-import { logoutAction, optimiseRouteAction, transitionAction } from "@/app/actions";
+import { CalendarClock, LogOut, MapPin, MessageSquareText, Phone, Route } from "lucide-react";
+import { deliverAction, logoutAction, optimiseRouteAction, transitionAction } from "@/app/actions";
+import { PhotoInput } from "@/components/photo-input";
 import { ActionForm, Submit } from "@/components/forms";
 import { LocaleSwitcher } from "@/components/locale-switcher";
-import { Logo, Money, Mono, Select } from "@/components/ui";
+import { Input, Logo, Money, Mono, Select } from "@/components/ui";
 import { money } from "@/lib/format";
 import { place, t } from "@/lib/i18n";
 import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { courierCash } from "@/server/services/ledger";
+import { getDeliverySettings } from "@/server/services/delivery";
+import { FAIL_REASONS, REASON_TEXT } from "@/server/services/notify";
 import { listParcels, type ParcelView } from "@/server/services/parcels";
 
 export const metadata = { title: "Run sheet" };
 
-const REASONS = ["Recipient not answering", "Recipient absent", "Refused the parcel", "Wrong address", "Asked to reschedule"];
-
-function Task({ p, kind }: { p: ParcelView; kind: "pickup" | "delivery" }) {
+function Task({ p, kind, proofRequired }: { p: ParcelView; kind: "pickup" | "delivery"; proofRequired: boolean }) {
   return (
     <li className="rounded-2xl border border-line bg-surface p-4 shadow-card">
       <div className="flex items-start justify-between gap-3">
@@ -31,6 +32,8 @@ function Task({ p, kind }: { p: ParcelView; kind: "pickup" | "delivery" }) {
         <>
           <p className="mt-3 flex items-start gap-2 text-sm text-ink-2"><MapPin size={16} className="mt-0.5 shrink-0 text-accent" />{p.address}, {place(p.commune, p.communeAr)}, {place(p.destWilaya, p.destWilayaAr)}</p>
           <a href={`tel:${p.recipientPhone.replaceAll(" ", "")}`} className="mt-2 inline-flex items-center gap-2 text-sm font-medium text-info"><Phone size={15} /><span className="ltr">{p.recipientPhone}</span></a>
+          {p.instructions && <p dir="auto" className="mt-3 flex items-start gap-2 rounded-xl bg-info-soft px-3 py-2 text-sm text-info"><MessageSquareText size={16} className="mt-0.5 shrink-0" />{p.instructions}</p>}
+          {p.preferredDate && <p className="mt-2 flex items-center gap-2 text-sm text-warn"><CalendarClock size={16} />{t("Recipient asked for {day}", { day: p.preferredDate })}</p>}
         </>
       )}
       {kind === "pickup" ? (
@@ -41,15 +44,20 @@ function Task({ p, kind }: { p: ParcelView; kind: "pickup" | "delivery" }) {
         </ActionForm>
       ) : (
         <div className="mt-4 space-y-2">
-          <ActionForm action={transitionAction}>
+          <ActionForm action={deliverAction} className="space-y-2 rounded-xl bg-paper p-3">
             <input type="hidden" name="parcelId" value={p.id} />
-            <input type="hidden" name="to" value="delivered" />
+            <p className="text-[13px] text-ink-2">{proofRequired ? t("Proof required: the recipient's code from their text message, or a photo.") : t("Proof of delivery: the recipient's code from their text message, or a photo.")}</p>
+            <div className="flex gap-2">
+              <Input name="code" inputMode="numeric" maxLength={4} pattern="[0-9]{4}" placeholder={t("4-digit code")} aria-label={t("Recipient's code")} className="!w-32 tnum" />
+              <Input name="receivedBy" placeholder={t("Received by (optional)")} aria-label={t("Received by")} className="min-w-0 flex-1" />
+            </div>
+            <PhotoInput max={1} />
             <Submit size="lg" className="w-full">{p.codAmount > 0 ? t("Delivered · collected {x} DZD", { x: money(p.codAmount) }) : t("Delivered")}</Submit>
           </ActionForm>
           <ActionForm action={transitionAction} className="flex flex-wrap gap-2">
             <input type="hidden" name="parcelId" value={p.id} />
             <input type="hidden" name="to" value="attempt_failed" />
-            <Select name="note" aria-label={t("Reason")} className="min-w-0 flex-1">{REASONS.map((r) => <option key={r} value={r}>{t(r)}</option>)}</Select>
+            <Select name="reason" aria-label={t("Reason")} className="min-w-0 flex-1">{FAIL_REASONS.map((r) => <option key={r} value={r}>{t(REASON_TEXT[r].en)}</option>)}</Select>
             <Submit variant="danger">{t("Failed")}</Submit>
           </ActionForm>
         </div>
@@ -61,7 +69,7 @@ function Task({ p, kind }: { p: ParcelView; kind: "pickup" | "delivery" }) {
 export default async function Courier() {
   const s = await requireRole("courier");
   const db = await getDb();
-  const [tasks, cash] = await Promise.all([listParcels(db, { courierId: s.userId, status: ["pickup_assigned", "out_for_delivery"] }), courierCash(db, s.userId)]);
+  const [tasks, cash, cfg] = await Promise.all([listParcels(db, { courierId: s.userId, status: ["pickup_assigned", "out_for_delivery"] }), courierCash(db, s.userId), getDeliverySettings(db)]);
   const pickups = tasks.filter((x) => x.status === "pickup_assigned");
   const deliveries = tasks.filter((x) => x.status === "out_for_delivery");
   return (
@@ -93,13 +101,13 @@ export default async function Courier() {
                 </ActionForm>
               )}
             </div>
-            <ul className="space-y-3">{deliveries.map((p) => <Task key={p.id} p={p} kind="delivery" />)}</ul>
+            <ul className="space-y-3">{deliveries.map((p) => <Task key={p.id} p={p} kind="delivery" proofRequired={cfg.proof === "required"} />)}</ul>
           </section>
         )}
         {pickups.length > 0 && (
           <section>
             <h2 className="mb-3 text-sm font-semibold uppercase tracking-wide text-muted">{t("Pickups")}</h2>
-            <ul className="space-y-3">{pickups.map((p) => <Task key={p.id} p={p} kind="pickup" />)}</ul>
+            <ul className="space-y-3">{pickups.map((p) => <Task key={p.id} p={p} kind="pickup" proofRequired={false} />)}</ul>
           </section>
         )}
       </main>

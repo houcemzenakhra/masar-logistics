@@ -2,6 +2,7 @@ import { and, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import { alias } from "drizzle-orm/pg-core";
 import type { Q } from "../db";
 import { bags, hubs, manifests, parcels } from "../schema";
+import { hubUsers, notify } from "./notify";
 import { DomainError, transition, type Actor } from "./parcels";
 
 /**
@@ -202,6 +203,9 @@ export async function departManifest(q: Q, manifestId: string, actor: Actor) {
     }
     await tx.update(bags).set({ status: "in_transit" }).where(eq(bags.manifestId, m.id));
     await tx.update(manifests).set({ status: "departed", departedAt: new Date() }).where(eq(manifests.id, m.id));
+    // Warn the receiving hub so they can expect the truck.
+    const [origin] = await tx.select({ name: hubs.name }).from(hubs).where(eq(hubs.id, m.originHubId));
+    await notify(tx, await hubUsers(tx, m.destHubId), "manifest", { code: m.code, origin: origin?.name ?? "", n: loaded.length }, { manifestId: m.id }, `${m.id}:departed`);
     return { code: m.code, bags: loaded.length, parcels: inside.length };
   });
 }

@@ -7,7 +7,10 @@ import { requireRole } from "@/lib/session";
 import { getDb } from "@/server/db";
 import { listCouriers } from "@/server/services/directory";
 import { getBag } from "@/server/services/linehaul";
+import { listClaims } from "@/server/services/claims";
+import { listProofs } from "@/server/services/delivery";
 import { getParcel } from "@/server/services/parcels";
+import { listRequests } from "@/server/services/recipient";
 import { listSms } from "@/server/services/sms";
 
 export default async function AdminParcel({ params }: { params: Promise<{ id: string }> }) {
@@ -15,11 +18,17 @@ export default async function AdminParcel({ params }: { params: Promise<{ id: st
   const db = await getDb();
   const [p, couriers] = await Promise.all([getParcel(db, { id: (await params).id }), listCouriers(db)]);
   if (!p) notFound();
-  const [bag, sms] = await Promise.all([p.bagId ? getBag(db, p.bagId) : null, listSms(db, { parcelId: p.id, limit: 20 })]);
+  const [bag, sms, proofs, requests, claims] = await Promise.all([
+    p.bagId ? getBag(db, p.bagId) : null,
+    listSms(db, { parcelId: p.id, limit: 20 }),
+    listProofs(db, p.id),
+    listRequests(db, p.id),
+    listClaims(db, { merchantId: p.merchantId }).then((c) => c.filter((x) => x.parcelId === p.id)),
+  ]);
   return (
     <>
       <Link href="/admin/parcels" className="mb-4 inline-flex items-center gap-1.5 text-sm text-muted hover:text-ink"><ArrowLeft size={15} className="rtl:-scale-x-100" /> {t("Parcels")}</Link>
-      <ParcelDetail p={p} session={s} couriers={couriers.filter((c) => c.isActive)} bag={bag} sms={sms} />
+      <ParcelDetail p={p} session={s} couriers={couriers.filter((c) => c.isActive)} bag={bag} sms={sms} door={{ proofs, requests, claims }} />
     </>
   );
 }
