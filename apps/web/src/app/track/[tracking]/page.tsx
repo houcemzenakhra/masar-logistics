@@ -85,6 +85,14 @@ type P = NonNullable<Awaited<ReturnType<typeof getParcel>>>;
 function Manage({ p, unlocked }: { p: P; unlocked: boolean }) {
   const open = !isTerminal(p.status as Status) && p.status !== "return_initiated";
   const canRate = p.status === "delivered" && p.rating == null;
+  if (p.status === "delivered" && p.rating != null && unlocked) {
+    return (
+      <Card className="p-5 sm:p-6">
+        <h2 className="text-[15px] font-semibold">{t("Thank you for your rating.")}</h2>
+        <p className="mt-1 text-sm text-ink-2">{t("You gave this delivery {n} out of 5.", { n: p.rating })}</p>
+      </Card>
+    );
+  }
   if (!open && !canRate) return null;
   if (!unlocked) {
     return (

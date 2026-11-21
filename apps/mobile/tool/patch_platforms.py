@@ -48,6 +48,19 @@ for name in ["build.gradle.kts", "build.gradle"]:
         t = re.sub(r"minSdkVersion\s+flutter\.minSdkVersion", "minSdkVersion 24", t)
         g.write_text(t)
 
+# Android's release lint crashes on some plugin sources ("Unexpected failure during lint
+# analysis"). It only checks for problems, so it is switched off for release builds.
+MARK = "// masar: skip lintVital"
+for name, block in [
+    ("build.gradle.kts", MARK + '\nsubprojects {\n    tasks.matching { it.name.startsWith("lintVital") }.configureEach { enabled = false }\n}\n'),
+    ("build.gradle", MARK + "\nsubprojects {\n    tasks.matching { it.name.startsWith('lintVital') }.configureEach { enabled = false }\n}\n"),
+]:
+    g = root / "android" / name
+    if g.exists():
+        t = g.read_text()
+        if MARK not in t:
+            g.write_text(t.rstrip() + "\n\n" + block)
+
 # ---------- iOS ----------
 plist = root / "ios/Runner/Info.plist"
 if plist.exists():

@@ -117,7 +117,7 @@ export function LiveMap() {
       </div>
       <div className="rounded-2xl bg-surface ring-1 ring-line">
         <div className="flex items-center justify-between border-b border-line px-4 py-3">
-          <h2 className="text-sm font-semibold">{t("{n} couriers on the map", { n: couriers.length })}</h2>
+          <h2 className="text-sm font-semibold">{t("Couriers on the map: {n}", { n: couriers.length })}</h2>
           <button type="button" onClick={() => void load()} aria-label={t("Refresh")} className="rounded-lg p-1.5 text-muted hover:text-ink"><RefreshCw size={15} /></button>
         </div>
         {couriers.length === 0 && <p className="p-4 text-sm text-muted">{t("No courier has shared a position in the last 12 hours. Positions come from the courier app while the courier is on duty.")}</p>}
